@@ -111,3 +111,6 @@ coverage/
 runs/
 weights/
 results/
+
+# 项目内部文档（不公开）
+项目优势说明.md
