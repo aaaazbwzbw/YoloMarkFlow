@@ -2,6 +2,48 @@ import { BaseImporter } from './BaseImporter'
 import { dbManager } from '../database'
 
 /**
+ * 路径处理工具函数（替代 Node.js path 模块）
+ */
+function pathDirname(filePath) {
+  const parts = filePath.replace(/\\/g, '/').split('/')
+  parts.pop()
+  return parts.join('/')
+}
+
+function pathJoin(...paths) {
+  return paths
+    .filter(p => p)
+    .join('/')
+    .replace(/\/+/g, '/')
+}
+
+function pathResolve(basePath, relativePath) {
+  if (relativePath.startsWith('/')) {
+    return relativePath
+  }
+  
+  const base = basePath.replace(/\\/g, '/')
+  const relative = relativePath.replace(/\\/g, '/')
+  
+  if (relative === '.' || relative === '') {
+    return base
+  }
+  
+  const baseParts = base.split('/').filter(p => p)
+  const relativeParts = relative.split('/').filter(p => p && p !== '.')
+  
+  for (const part of relativeParts) {
+    if (part === '..') {
+      baseParts.pop()
+    } else {
+      baseParts.push(part)
+    }
+  }
+  
+  return baseParts.join('/')
+}
+
+/**
  * COCO数据集导入器
  * 
  * 支持的数据集结构：
@@ -20,10 +62,18 @@ export class CocoImporter extends BaseImporter {
 
   /**
    * 导入COCO数据集
+   * @param {Object} options - 导入选项
+   * @param {String} options.configFilePath - annotations.json 文件路径（新方式）
+   * @param {String} options.datasetPath - 数据集目录（向后兼容）
+   * @param {String} options.projectPath - 目标项目路径
+   * @param {String} options.projectName - 项目名称
+   * @param {Boolean} options.copyImages - 是否复制图片到图片池
+   * @param {Function} options.onProgress - 进度回调
    */
   async import(options) {
     const {
-      datasetPath,
+      configFilePath,
+      datasetPath, // 向后兼容：如果提供了数据集目录，则使用旧逻辑
       projectPath,
       projectName,
       copyImages = true,
@@ -42,10 +92,69 @@ export class CocoImporter extends BaseImporter {
     try {
       onProgress?.(0, 100, '验证数据集结构...')
 
-      // 1. 检测数据集类型并验证
-      const datasetInfo = await this.detectDatasetStructure(datasetPath)
-      if (!datasetInfo.valid) {
-        throw new Error(datasetInfo.message)
+      let datasetInfo = null
+      
+      // 如果提供了 configFilePath，使用新的基于配置文件的导入方式
+      if (configFilePath) {
+        // 新方式：从 JSON 文件读取配置
+        if (!await this.fileExists(configFilePath)) {
+          throw new Error(`配置文件不存在: ${configFilePath}`)
+        }
+
+        onProgress?.(5, 100, '读取配置文件...')
+        const cocoData = await this.readJSON(configFilePath)
+        
+        // 计算数据集根目录：configFilePath 所在目录
+        const jsonDir = pathDirname(configFilePath)
+        
+        // 从 JSON 文件中读取图片路径信息
+        // COCO JSON 中，images 数组包含 file_name，需要确定图片目录
+        // 如果 JSON 在 annotations 目录下，图片通常在上一级目录的 images 下
+        const possibleImageDirs = [
+          // 如果 JSON 在 annotations 目录下，尝试上一级目录的 images
+          pathJoin(pathDirname(jsonDir), 'images', 'train'),
+          pathJoin(pathDirname(jsonDir), 'images', 'val'),
+          pathJoin(pathDirname(jsonDir), 'images'),
+          pathJoin(pathDirname(jsonDir), 'img'),
+          // 当前目录下的 images
+          pathJoin(jsonDir, 'images'),
+          pathJoin(jsonDir, 'img'),
+          // 直接在当前目录
+          jsonDir,
+          // 上一级目录
+          pathDirname(jsonDir)
+        ]
+
+        let imageDir = null
+        for (const dir of possibleImageDirs) {
+          if (cocoData.images && cocoData.images.length > 0) {
+            const firstImage = cocoData.images[0]
+            const testPath = pathJoin(dir, firstImage.file_name)
+            if (await this.fileExists(testPath)) {
+              imageDir = dir
+              break
+            }
+          }
+        }
+
+        if (!imageDir) {
+          throw new Error('无法确定图片目录位置，请检查 JSON 文件中的 file_name 路径')
+        }
+
+        datasetInfo = {
+          valid: true,
+          type: 'single',
+          jsonFiles: [{ path: configFilePath, split: 'all', imageDir }]
+        }
+      } else if (datasetPath) {
+        // 向后兼容：使用旧方式（从数据集目录读取）
+        datasetInfo = await this.detectDatasetStructure(datasetPath)
+      } else {
+        throw new Error('必须提供 configFilePath 或 datasetPath')
+      }
+
+      if (!datasetInfo || !datasetInfo.valid) {
+        throw new Error(datasetInfo?.message || '数据集验证失败')
       }
 
       onProgress?.(5, 100, '读取数据集配置...')
@@ -134,9 +243,9 @@ export class CocoImporter extends BaseImporter {
 
     // 检查标准COCO结构
     const standardPaths = [
-      { path: `${datasetPath}/annotations/instances_train.json`, split: 'train', imageDir: `${datasetPath}/images/train` },
-      { path: `${datasetPath}/annotations/instances_val.json`, split: 'val', imageDir: `${datasetPath}/images/val` },
-      { path: `${datasetPath}/annotations/instances_test.json`, split: 'test', imageDir: `${datasetPath}/images/test` }
+      { path: pathJoin(datasetPath, 'annotations', 'instances_train.json'), split: 'train', imageDir: pathJoin(datasetPath, 'images', 'train') },
+      { path: pathJoin(datasetPath, 'annotations', 'instances_val.json'), split: 'val', imageDir: pathJoin(datasetPath, 'images', 'val') },
+      { path: pathJoin(datasetPath, 'annotations', 'instances_test.json'), split: 'test', imageDir: pathJoin(datasetPath, 'images', 'test') }
     ]
 
     for (const item of standardPaths) {
@@ -156,17 +265,17 @@ export class CocoImporter extends BaseImporter {
 
     // 检查单个JSON文件
     const singleJsonPatterns = [
-      `${datasetPath}/annotations.json`,
-      `${datasetPath}/instances.json`,
-      `${datasetPath}/annotations/instances.json`
+      pathJoin(datasetPath, 'annotations.json'),
+      pathJoin(datasetPath, 'instances.json'),
+      pathJoin(datasetPath, 'annotations', 'instances.json')
     ]
 
     for (const jsonPath of singleJsonPatterns) {
       if (await this.fileExists(jsonPath)) {
         // 查找图片目录
         const possibleImageDirs = [
-          `${datasetPath}/images`,
-          `${datasetPath}/img`,
+          pathJoin(datasetPath, 'images'),
+          pathJoin(datasetPath, 'img'),
           datasetPath // 图片可能直接在根目录
         ]
 
@@ -354,9 +463,86 @@ export class CocoImporter extends BaseImporter {
 
   /**
    * 验证数据集
+   * @param {String} configFilePathOrDatasetPath - annotations.json 文件路径或数据集目录（向后兼容）
    */
-  async validateDataset(datasetPath) {
-    return await this.detectDatasetStructure(datasetPath)
+  async validateDataset(configFilePathOrDatasetPath) {
+    // 检查是否是文件路径（JSON）
+    const isFile = configFilePathOrDatasetPath.endsWith('.json')
+    
+    if (isFile) {
+      // 新方式：验证配置文件
+      if (!await this.fileExists(configFilePathOrDatasetPath)) {
+        return {
+          valid: false,
+          message: `配置文件不存在: ${configFilePathOrDatasetPath}`
+        }
+      }
+
+      try {
+        const cocoData = await this.readJSON(configFilePathOrDatasetPath)
+        
+        // 验证 JSON 结构
+        if (!cocoData.images || cocoData.images.length === 0) {
+          return {
+            valid: false,
+            message: 'JSON 文件中没有图片信息'
+          }
+        }
+
+        // 计算数据集根目录
+        const jsonDir = pathDirname(configFilePathOrDatasetPath)
+        
+        // 检查是否能找到图片目录
+        // 如果 JSON 在 annotations 目录下，图片通常在上一级目录的 images 下
+        const possibleImageDirs = [
+          // 如果 JSON 在 annotations 目录下，尝试上一级目录的 images
+          pathJoin(pathDirname(jsonDir), 'images', 'train'),
+          pathJoin(pathDirname(jsonDir), 'images', 'val'),
+          pathJoin(pathDirname(jsonDir), 'images'),
+          pathJoin(pathDirname(jsonDir), 'img'),
+          // 当前目录下的 images
+          pathJoin(jsonDir, 'images'),
+          pathJoin(jsonDir, 'img'),
+          // 直接在当前目录
+          jsonDir,
+          // 上一级目录
+          pathDirname(jsonDir)
+        ]
+
+        let hasImages = false
+        if (cocoData.images && cocoData.images.length > 0) {
+          const firstImage = cocoData.images[0]
+          for (const dir of possibleImageDirs) {
+            const testPath = pathJoin(dir, firstImage.file_name)
+            if (await this.fileExists(testPath)) {
+              hasImages = true
+              break
+            }
+          }
+        }
+
+        if (!hasImages) {
+          return {
+            valid: false,
+            message: '无法找到图片目录，请检查 JSON 文件中的 file_name 路径'
+          }
+        }
+
+        const categoryCount = cocoData.categories?.length || 0
+        return {
+          valid: true,
+          message: `数据集验证通过 (${cocoData.images.length} 张图片, ${categoryCount} 个类别)`
+        }
+      } catch (error) {
+        return {
+          valid: false,
+          message: `解析配置文件失败: ${error.message}`
+        }
+      }
+    } else {
+      // 向后兼容：验证数据集目录
+      return await this.detectDatasetStructure(configFilePathOrDatasetPath)
+    }
   }
 }
 

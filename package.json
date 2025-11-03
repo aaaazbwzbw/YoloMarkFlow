@@ -1,6 +1,6 @@
 {
   "name": "yolomarkflow",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "图像标注工具，支持 YOLO 与 COCO 导入导出，集成训练插件以完成模型训练",
   "author": "YoloMarkFlow Team",
   "license": "MIT",
@@ -16,7 +16,7 @@
     "dev": "concurrently \"npm run vue-dev\" \"npm run electron\"",
     "rebuild": "electron-rebuild -f -w sqlite3 -v 26.2.1",
     "postinstall": "electron-rebuild -f -w sqlite3 -v 26.2.1",
-    "electron:build": "vite build && set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64"
+    "electron:build": "vite build && electron-builder --win --x64"
   },
   "dependencies": {
     "@arco-design/web-vue": "^2.57.0",
@@ -57,18 +57,24 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "models/**/*",
       "loading.html",
       "用户手册.md",
       "node_modules/sqlite3/**/*",
       "!**/*.{ts,map}",
-      "!plugins/**/*"
+      "!plugins/**/*",
+      "!models/**/*"
     ],
     "asar": true,
     "asarUnpack": [
       "**/*.node",
-      "node_modules/sqlite3/**/*",
-      "models/**/*"
+      "node_modules/sqlite3/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "models",
+        "to": "model",
+        "filter": ["**/*.pt"]
+      }
     ],
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
@@ -84,15 +90,27 @@
       ],
       "icon": "build/icons/win/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "signAndEditExecutable": false,
-      "signDlls": false
+      "executableName": "YoloMarkFlow",
+      "sign": null,
+      "verifyUpdateCodeSignature": false
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "shortcutName": "YoloMarkFlow",
+      "installerIcon": "build/icons/win/icon.ico",
+      "uninstallerIcon": "build/icons/win/icon.ico",
+      "installerHeaderIcon": "build/icons/win/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "allowElevation": true,
+      "warningsAsErrors": false,
+      "runAfterFinish": false,
+      "menuCategory": false,
+      "include": "build/installer-hooks.nsh",
+      "packElevateHelper": false
     },
     "mac": {
       "target": "dmg",

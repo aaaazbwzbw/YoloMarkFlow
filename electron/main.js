@@ -187,6 +187,28 @@ async function checkDevServerWithRetry(url, maxRetries = 2, delay = 1000) {
 }
 
 async function createWindow() {
+  // 设置窗口图标（优先级：打包后的图标 > 开发环境的图标）
+  let iconPath = null
+  if (app.isPackaged) {
+    // 打包后：从resources目录获取图标
+    iconPath = path.join(process.resourcesPath, 'build', 'icons', 'win', 'icon.ico')
+    // 如果上面的路径不存在，尝试从exe目录获取
+    if (!fsSync.existsSync(iconPath)) {
+      iconPath = path.join(path.dirname(app.getPath('exe')), 'resources', 'build', 'icons', 'win', 'icon.ico')
+    }
+    // 如果还是不存在，使用exe文件本身（electron-builder会将图标嵌入exe）
+    if (!fsSync.existsSync(iconPath)) {
+      iconPath = app.getPath('exe')
+    }
+  } else {
+    // 开发环境：从项目目录获取图标
+    iconPath = path.join(__dirname, '..', 'build', 'icons', 'win', 'icon.ico')
+    // 如果开发环境图标不存在，使用默认（可选）
+    if (!fsSync.existsSync(iconPath)) {
+      iconPath = undefined
+    }
+  }
+
   mainWindow = new BrowserWindow({
     width: 1920,
     height: 1080,
@@ -195,6 +217,7 @@ async function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#000000',
+    icon: iconPath, // 设置窗口图标
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: true,
@@ -334,12 +357,7 @@ async function createWindow() {
   // 查找所有项目
   ipcMain.handle('project:findAll', async (event) => {
     try {
-      const workspaceResult = await getWorkspacePath()
-      if (!workspaceResult.success) {
-        return { success: false, error: workspaceResult.error }
-      }
-      
-      const workspacePath = workspaceResult.path
+      const workspacePath = getWorkspacePath()
       const projectsPath = path.join(workspacePath, 'projects')
       
       // 确保项目目录存在
@@ -387,12 +405,7 @@ async function createWindow() {
   // 查找所有数据集
   ipcMain.handle('dataset:findAll', async (event) => {
     try {
-      const workspaceResult = await getWorkspacePath()
-      if (!workspaceResult.success) {
-        return { success: false, error: workspaceResult.error }
-      }
-      
-      const workspacePath = workspaceResult.path
+      const workspacePath = getWorkspacePath()
       const datasetsPath = path.join(workspacePath, 'datasets')
       
       // 确保数据集目录存在
@@ -449,33 +462,56 @@ async function createWindow() {
     }
   })
 
-  // 检查图片被多少项目引用
+  // 注册项目路径
+  ipcMain.handle('project:register', async (event, projectPath) => {
+    try {
+      await registerProjectPath(projectPath)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 注销项目路径
+  ipcMain.handle('project:unregister', async (event, projectPath) => {
+    try {
+      await unregisterProjectPath(projectPath)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 获取所有已注册的项目路径
+  ipcMain.handle('project:getAllRegistered', async (event) => {
+    try {
+      const registry = await readProjectRegistry()
+      return { success: true, paths: registry }
+    } catch (error) {
+      return { success: false, error: error.message, paths: [] }
+    }
+  })
+
+  // 检查图片被多少项目和数据集引用
   ipcMain.handle('imagePool:checkImageReferences', async (event, imageId) => {
     try {
-      const workspaceResult = await getWorkspacePath()
-      if (!workspaceResult.success) {
-        return { success: false, error: workspaceResult.error }
-      }
+      // 获取工作空间路径
+      const workspacePath = getWorkspacePath()
+      const datasetsPath = path.join(workspacePath, 'datasets')
       
-      const workspacePath = workspaceResult.path
-      const projectsPath = path.join(workspacePath, 'projects')
+      console.log(`[checkImageReferences] 检查图片 ${imageId} 的引用，工作空间: ${workspacePath}`)
       
-      let referenceCount = 0
-      
-      // 确保项目目录存在
-      try {
-        await fs.access(projectsPath)
-      } catch {
-        return { success: true, referenceCount: 0 }
-      }
-      
-      // 列出所有项目
-      const entries = await fs.readdir(projectsPath, { withFileTypes: true })
+      let projectReferenceCount = 0
+      let datasetReferenceCount = 0
       const sqlite3 = require('sqlite3').verbose()
       
-      for (const entry of entries) {
-        if (entry.isDirectory()) {
-          const projectPath = path.join(projectsPath, entry.name)
+      // 1. 检查项目引用（从注册列表中读取所有项目路径）
+      try {
+        const projectPaths = await readProjectRegistry()
+        console.log(`[checkImageReferences] 从注册列表找到 ${projectPaths.length} 个项目，开始检查引用...`)
+        
+        // 检查每个项目的数据库
+        for (const projectPath of projectPaths) {
           const dbPath = path.join(projectPath, 'annotations.db')
           
           try {
@@ -487,65 +523,195 @@ async function createWindow() {
               db.get('SELECT COUNT(*) as count FROM project_images WHERE image_id = ?', [imageId], (err, row) => {
                 db.close()
                 if (err) reject(err)
-                else resolve(row.count)
+                else resolve(row ? row.count : 0)
               })
             })
             
-            referenceCount += count
-          } catch {
-            // 跳过无效的项目
+            if (count > 0) {
+              console.log(`[checkImageReferences] 项目 ${projectPath} 引用了图片 ${imageId} (${count} 次)`)
+            }
+            
+            projectReferenceCount += count
+          } catch (error) {
+            console.warn(`[checkImageReferences] 检查项目失败 ${projectPath}:`, error.message)
           }
         }
+      } catch (error) {
+        console.warn(`[checkImageReferences] 检查项目引用时出错:`, error.message)
       }
       
-      return { success: true, referenceCount }
+      // 2. 检查数据集引用（包括所有版本）
+      try {
+        await fs.access(datasetsPath)
+        
+        // 列出所有数据集
+        const datasetEntries = await fs.readdir(datasetsPath, { withFileTypes: true })
+        
+        for (const entry of datasetEntries) {
+          if (entry.isDirectory()) {
+            const datasetPath = path.join(datasetsPath, entry.name)
+            
+            // 检查当前版本的数据库
+            const currentDbPath = path.join(datasetPath, 'annotations.db')
+            try {
+              await fs.access(currentDbPath)
+              
+              // 检查此数据集数据库中是否有该图片
+              const count = await new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(currentDbPath)
+                db.get('SELECT COUNT(*) as count FROM dataset_images WHERE image_id = ?', [imageId], (err, row) => {
+                  db.close()
+                  if (err) reject(err)
+                  else resolve(row ? row.count : 0)
+                })
+              })
+              
+              datasetReferenceCount += count
+            } catch {
+              // 跳过无效的数据集数据库
+            }
+            
+            // 检查所有版本的备份数据库（annotations_v1.db, annotations_v2.db, ...）
+            try {
+              const datasetFiles = await fs.readdir(datasetPath)
+              const versionDbFiles = datasetFiles.filter(file => 
+                /^annotations_v\d+\.db$/.test(file)
+              )
+              
+              for (const versionDbFile of versionDbFiles) {
+                const versionDbPath = path.join(datasetPath, versionDbFile)
+                try {
+                  // 检查此版本数据库是否有该图片
+                  const count = await new Promise((resolve, reject) => {
+                    const db = new sqlite3.Database(versionDbPath)
+                    db.get('SELECT COUNT(*) as count FROM dataset_images WHERE image_id = ?', [imageId], (err, row) => {
+                      db.close()
+                      if (err) reject(err)
+                      else resolve(row ? row.count : 0)
+                    })
+                  })
+                  
+                  datasetReferenceCount += count
+                } catch (err) {
+                  // 跳过无效的版本数据库
+                  console.warn(`[checkImageReferences] 检查版本数据库失败 ${versionDbPath}:`, err.message)
+                }
+              }
+            } catch {
+              // 无法读取数据集目录，跳过
+            }
+          }
+        }
+      } catch {
+        // 数据集目录不存在，忽略
+      }
+      
+      const totalReferenceCount = projectReferenceCount + datasetReferenceCount
+      
+      console.log(`[checkImageReferences] 图片 ${imageId} 引用统计: 项目=${projectReferenceCount}, 数据集=${datasetReferenceCount}, 总计=${totalReferenceCount}`)
+      
+      return { 
+        success: true, 
+        referenceCount: totalReferenceCount,
+        projectReferenceCount,
+        datasetReferenceCount
+      }
     } catch (error) {
       return { success: false, error: error.message }
     }
   })
 
   // 从图片池中删除图片
-  ipcMain.handle('imagePool:deleteImage', async (event, imageId) => {
+  ipcMain.handle('imagePool:deleteImage', async (event, imageId, customWorkspacePath) => {
     try {
-      // 注意：主进程中无法使用 localStorage，直接使用默认路径
-      // TODO: 未来可以从配置文件读取自定义路径
-      const imagePoolPath = 'D:\\YoloMarkFlow\\YoloMarkFlow_ImagePool'
+      // 获取工作空间路径（支持自定义，优先使用传入的路径）
+      let workspacePath
+      if (customWorkspacePath) {
+        workspacePath = customWorkspacePath
+      } else {
+        // 默认路径
+        workspacePath = 'D:\\YoloMarkFlow\\YoloMarkFlow_ImagePool'
+      }
       
-      const dbPath = path.join(imagePoolPath, 'imagePool.db')
+      // 数据库路径：${workspacePath}/image_pool.db（不是 imagePool.db）
+      const dbPath = path.join(workspacePath, 'image_pool.db')
+      const imagePoolDir = path.join(workspacePath, 'image_pool')
+      
+      console.log(`[deleteImage] 工作空间路径: ${workspacePath}`)
+      console.log(`[deleteImage] 数据库路径: ${dbPath}`)
+      console.log(`[deleteImage] 图片目录: ${imagePoolDir}`)
+      
+      // 确保数据库文件存在
+      try {
+        await fs.access(dbPath)
+      } catch (error) {
+        console.error(`[deleteImage] 数据库文件不存在: ${dbPath}`)
+        return { success: false, error: `数据库文件不存在: ${dbPath}` }
+      }
+      
       const sqlite3 = require('sqlite3').verbose()
       const db = new sqlite3.Database(dbPath)
       
-      // 先获取图片路径
-      const imagePath = await new Promise((resolve, reject) => {
-        db.get('SELECT path FROM images WHERE id = ?', [imageId], (err, row) => {
-          if (err) reject(err)
-          else resolve(row ? row.path : null)
+      // 先获取图片文件名（数据库存储的是 filename，不是 path）
+      const row = await new Promise((resolve, reject) => {
+        db.get('SELECT filename FROM images WHERE id = ?', [imageId], (err, result) => {
+          if (err) {
+            db.close()
+            reject(err)
+          } else {
+            resolve(result)
+          }
         })
       })
       
-      if (!imagePath) {
+      if (!row || !row.filename) {
         db.close()
-        return { success: false, error: '图片不存在' }
+        return { success: false, error: '图片不存在于数据库' }
       }
       
+      // 构建完整图片文件路径：${workspacePath}/image_pool/${filename}
+      const imageFilePath = path.join(imagePoolDir, row.filename)
+      
+      console.log(`[deleteImage] 准备删除图片: ID=${imageId}, filename=${row.filename}, path=${imageFilePath}`)
+      
       // 删除物理文件
+      let fileDeleted = false
       try {
-        await fs.unlink(imagePath)
+        await fs.access(imageFilePath) // 先检查文件是否存在
+        await fs.unlink(imageFilePath)
+        fileDeleted = true
+        console.log(`[deleteImage] 物理文件删除成功: ${imageFilePath}`)
       } catch (error) {
-        console.error('删除物理文件失败:', error)
+        if (error.code === 'ENOENT') {
+          console.warn(`[deleteImage] 物理文件不存在，可能已被删除: ${imageFilePath}`)
+          fileDeleted = true // 文件不存在也算删除成功
+        } else {
+          console.error(`[deleteImage] 删除物理文件失败: ${error.message}`, error)
+          // 继续删除数据库记录，即使文件删除失败
+        }
       }
       
       // 删除数据库记录
       await new Promise((resolve, reject) => {
         db.run('DELETE FROM images WHERE id = ?', [imageId], function(err) {
           db.close()
-          if (err) reject(err)
-          else resolve()
+          if (err) {
+            console.error(`[deleteImage] 删除数据库记录失败:`, err)
+            reject(err)
+          } else {
+            console.log(`[deleteImage] 数据库记录删除成功，影响行数: ${this.changes}`)
+            resolve()
+          }
         })
       })
       
-      return { success: true }
+      return { 
+        success: true,
+        fileDeleted,
+        filename: row.filename
+      }
     } catch (error) {
+      console.error(`[deleteImage] 删除图片失败:`, error)
       return { success: false, error: error.message }
     }
   })
@@ -1468,6 +1634,97 @@ function getWorkspacePath() {
 }
 
 /**
+ * 获取项目注册列表文件路径
+ */
+function getProjectRegistryPath() {
+  const workspacePath = getWorkspacePath()
+  return path.join(workspacePath, 'projects_registry.json')
+}
+
+/**
+ * 读取项目注册列表
+ */
+async function readProjectRegistry() {
+  try {
+    const registryPath = getProjectRegistryPath()
+    try {
+      await fs.access(registryPath)
+      const content = await fs.readFile(registryPath, 'utf-8')
+      const registry = JSON.parse(content)
+      return Array.isArray(registry) ? registry : []
+    } catch {
+      // 文件不存在，返回空数组
+      return []
+    }
+  } catch (error) {
+    console.error('读取项目注册列表失败:', error)
+    return []
+  }
+}
+
+/**
+ * 写入项目注册列表
+ */
+async function writeProjectRegistry(projectPaths) {
+  try {
+    const registryPath = getProjectRegistryPath()
+    const workspacePath = getWorkspacePath()
+    
+    // 确保工作空间目录存在
+    await fs.mkdir(workspacePath, { recursive: true })
+    
+    // 去重并规范化路径
+    const normalizedPaths = [...new Set(projectPaths.map(p => path.normalize(p)))]
+    
+    await fs.writeFile(registryPath, JSON.stringify(normalizedPaths, null, 2), 'utf-8')
+    return true
+  } catch (error) {
+    console.error('写入项目注册列表失败:', error)
+    return false
+  }
+}
+
+/**
+ * 注册项目路径
+ */
+async function registerProjectPath(projectPath) {
+  try {
+    const registry = await readProjectRegistry()
+    const normalizedPath = path.normalize(projectPath)
+    
+    if (!registry.includes(normalizedPath)) {
+      registry.push(normalizedPath)
+      await writeProjectRegistry(registry)
+      console.log(`[registerProject] 已注册项目路径: ${normalizedPath}`)
+    }
+    return true
+  } catch (error) {
+    console.error('注册项目路径失败:', error)
+    return false
+  }
+}
+
+/**
+ * 注销项目路径
+ */
+async function unregisterProjectPath(projectPath) {
+  try {
+    const registry = await readProjectRegistry()
+    const normalizedPath = path.normalize(projectPath)
+    
+    const filtered = registry.filter(p => path.normalize(p) !== normalizedPath)
+    if (filtered.length !== registry.length) {
+      await writeProjectRegistry(filtered)
+      console.log(`[unregisterProject] 已注销项目路径: ${normalizedPath}`)
+    }
+    return true
+  } catch (error) {
+    console.error('注销项目路径失败:', error)
+    return false
+  }
+}
+
+/**
  * 获取GPU信息（NVIDIA显卡）
  */
 function getGPUInfo() {
@@ -1828,8 +2085,15 @@ ipcMain.handle('training:scanModels', async () => {
     // 扫描两个目录的模型文件
     const modelDirs = []
     
-    // 1. 打包后：app.asar.unpacked/models
+    // 1. 打包后：优先安装目录根目录下的 model 目录
     if (app.isPackaged) {
+      // 优先：安装目录根目录下的 model
+      const installDirModelPath = path.join(path.dirname(app.getPath('exe')), 'model')
+      if (fsSync.existsSync(installDirModelPath)) {
+        modelDirs.push(installDirModelPath)
+      }
+      
+      // 兼容旧版本：app.asar.unpacked/models
       const packagedModelsDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'models')
       if (fsSync.existsSync(packagedModelsDir)) {
         modelDirs.push(packagedModelsDir)
@@ -1842,7 +2106,7 @@ ipcMain.handle('training:scanModels', async () => {
       }
     }
     
-    // 2. 用户自定义：D:\YoloMarkFlow\model
+    // 2. 用户自定义：D:\YoloMarkFlow\model（工作空间）
     const userModelsDir = path.join(getWorkspacePath(), 'model')
     if (fsSync.existsSync(userModelsDir)) {
       modelDirs.push(userModelsDir)
@@ -2482,6 +2746,35 @@ ipcMain.handle('model:inference', async (event, { modelPath, imagePath, confThre
   }
 })
 
+// 获取默认项目路径（检查D盘，如果不存在则使用应用目录）
+ipcMain.handle('project:getDefaultPath', async (event, projectName) => {
+  try {
+    let basePath
+    
+    // 检查D盘是否存在
+    try {
+      await fs.access('D:\\')
+      // D盘存在，使用 D:\YoloMarkFlow\YoloMarkFlow_item
+      basePath = 'D:\\YoloMarkFlow\\YoloMarkFlow_item'
+    } catch {
+      // D盘不存在，使用应用安装目录
+      const appDir = path.dirname(app.getPath('exe'))
+      basePath = path.join(appDir, 'YoloMarkFlow_item')
+    }
+    
+    // 如果提供了项目名，拼接项目名
+    if (projectName) {
+      const fullPath = path.join(basePath, projectName)
+      return { success: true, path: fullPath, basePath }
+    }
+    
+    return { success: true, path: basePath, basePath }
+  } catch (error) {
+    console.error('[Project] Failed to get default path:', error)
+    return { success: false, error: error.message }
+  }
+})
+
 // 卸载指定模型
 ipcMain.handle('model:unloadModel', async (event, modelPath) => {
   try {
@@ -2574,6 +2867,14 @@ function initializeWorkspaceDirectories() {
   })
   
   console.log('[Init] Workspace directories initialization complete')
+}
+
+// 设置应用名称（必须在app.whenReady()之前，确保任务管理器显示正确的名称）
+app.setName('YoloMarkFlow')
+
+// 设置应用用户模型ID（Windows任务栏和开始菜单图标）
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.yolomarkflow.app')
 }
 
 app.whenReady().then(() => {

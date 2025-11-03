@@ -244,9 +244,16 @@ export class DatabaseManager {
       throw new Error('数据库未初始化')
     }
 
-    await window.electronAPI.runSQL(this.dbPath, 'DELETE FROM annotations WHERE image_id = ?', [imageId])
+    const result = await window.electronAPI.runSQL(this.dbPath, 'DELETE FROM annotations WHERE image_id = ?', [imageId])
     
-    console.log(`图片 ${imageId} 的标注已删除`)
+    if (!result || !result.success) {
+      throw new Error(result?.error || '删除标注失败')
+    }
+    
+    const deletedCount = result.result?.changes || 0
+    console.log(`图片 ${imageId} 的标注已删除（删除了 ${deletedCount} 条标注）`)
+    
+    return deletedCount
   }
 
   /**

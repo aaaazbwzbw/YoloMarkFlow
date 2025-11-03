@@ -20,12 +20,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteProject: (path) => ipcRenderer.invoke('project:delete', path),
   findAllProjects: () => ipcRenderer.invoke('project:findAll'),
   findAllDatasets: () => ipcRenderer.invoke('dataset:findAll'),
+  getDefaultProjectPath: (projectName) => ipcRenderer.invoke('project:getDefaultPath', projectName),
   saveProjectWorkspaceState: (projectPath, state) => ipcRenderer.invoke('save-project-workspace-state', projectPath, state),
   loadProjectWorkspaceState: (projectPath) => ipcRenderer.invoke('load-project-workspace-state', projectPath),
   
   // 项目操作
   project: {
-    removeImage: (params) => ipcRenderer.invoke('project:removeImage', params)
+    removeImage: (params) => ipcRenderer.invoke('project:removeImage', params),
+    register: (projectPath) => ipcRenderer.invoke('project:register', projectPath),
+    unregister: (projectPath) => ipcRenderer.invoke('project:unregister', projectPath),
+    getAllRegistered: () => ipcRenderer.invoke('project:getAllRegistered')
   },
   
   // 应用信息
@@ -81,7 +85,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initImagePool: (customWorkspacePath) => ipcRenderer.invoke('imagePool:init', customWorkspacePath),
   imagePool: {
     checkImageReferences: (imageId) => ipcRenderer.invoke('imagePool:checkImageReferences', imageId),
-    deleteImage: (imageId) => ipcRenderer.invoke('imagePool:deleteImage', imageId)
+    deleteImage: (imageId, workspacePath) => ipcRenderer.invoke('imagePool:deleteImage', imageId, workspacePath)
   },
   
   // 训练管理

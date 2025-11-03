@@ -17,7 +17,7 @@ export function createProjectConfig(projectInfo) {
     description: projectInfo.description || '',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    version: '1.0.0',
+    version: '1.0.1',
     settings: {
       imageFormats: ['.jpg', '.jpeg', '.png', '.bmp'],
       labelFormat: 'yolo', // yolo, coco, voc

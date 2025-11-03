@@ -157,13 +157,30 @@ class TrainingController {
       
       console.log('[TrainingController] Training output directory:', outputDir)
 
-      // 解析预训练模型目录（开发/打包两种路径）
+      // 解析预训练模型目录（优先安装目录根目录的 model，其次工作空间的 model）
       let pretrainedModelsDir
       try {
         const { app } = require('electron')
         if (app && app.isPackaged) {
-          // 打包环境：从 app.asar.unpacked/models 读取
-          pretrainedModelsDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'models')
+          // 打包环境：优先使用安装目录根目录下的 model 目录
+          const installDirModelPath = path.join(path.dirname(app.getPath('exe')), 'model')
+          if (fsSync.existsSync(installDirModelPath)) {
+            pretrainedModelsDir = installDirModelPath
+            console.log('[TrainingController] Using model directory from install root:', pretrainedModelsDir)
+          } else {
+            // 如果安装目录根目录没有 model，使用工作空间的 model
+            // 直接从工作空间路径获取（不依赖 main.js）
+            const workspacePath = 'D:\\YoloMarkFlow'
+            const workspaceModelPath = path.join(workspacePath, 'model')
+            if (fsSync.existsSync(workspaceModelPath)) {
+              pretrainedModelsDir = workspaceModelPath
+              console.log('[TrainingController] Using model directory from workspace:', pretrainedModelsDir)
+            } else {
+              // 最后回退到 app.asar.unpacked/models（兼容旧版本）
+              pretrainedModelsDir = path.join(process.resourcesPath, 'app.asar.unpacked', 'models')
+              console.log('[TrainingController] Using model directory from app.asar.unpacked:', pretrainedModelsDir)
+            }
+          }
         } else {
           // 开发环境：项目内 models 目录
           pretrainedModelsDir = path.join(__dirname, '..', 'models')

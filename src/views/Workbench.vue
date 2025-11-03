@@ -2440,24 +2440,80 @@ export default {
           return
         }
         
-        // 1. 从当前项目数据库中删除该图片的所有标注
-        await dbManager.deleteImageAnnotations(image.id)
+        // 注意：image.id 是 project_images 表的主键
+        // image.imageId 是图片池的 image_id（用于 annotations 表和 project_images.image_id）
+        const poolImageId = image.imageId || image.id  // 兼容处理
         
-        // 2. 从项目的图片引用中移除
-        await window.electronAPI.project.removeImage({
+        if (!poolImageId) {
+          throw new Error('无法获取图片ID')
+        }
+        
+        console.log(`开始删除图片：image.id=${image.id}, image.imageId=${image.imageId}, poolImageId=${poolImageId}`)
+        
+        // 1. 从当前项目数据库中删除该图片的所有标注（使用图片池的 image_id）
+        const deletedCount = await dbManager.deleteImageAnnotations(poolImageId)
+        console.log(`图片 ${poolImageId} 及其标注（${deletedCount} 条）已从数据库删除`)
+        
+        // 2. 从项目的图片引用中移除（使用图片池的 image_id）
+        const removeResult = await window.electronAPI.project.removeImage({
           projectPath: currentProject.path,
-          imageId: image.id
+          imageId: poolImageId
         })
         
-        // 3. 检查该图片是否还被其他项目引用
-        const result = await window.electronAPI.imagePool.checkImageReferences(image.id)
+        if (!removeResult || !removeResult.success) {
+          throw new Error(removeResult?.error || '从项目中移除图片引用失败')
+        }
+        console.log(`图片 ${poolImageId} 已从项目引用中移除`)
+        
+        // 3. 检查该图片是否还被其他项目或数据集引用
+        const result = await window.electronAPI.imagePool.checkImageReferences(poolImageId)
+        
+        console.log(`检查图片 ${poolImageId} 的引用情况:`, {
+          success: result.success,
+          referenceCount: result.referenceCount,
+          projectReferenceCount: result.projectReferenceCount,
+          datasetReferenceCount: result.datasetReferenceCount,
+          error: result.error
+        })
         
         if (result.success && result.referenceCount === 0) {
-          // 没有其他项目引用了，删除物理文件和图片池记录
-          await window.electronAPI.imagePool.deleteImage(image.id)
-          this.$message.success('图片已从项目和图片池中删除')
+          // 没有其他项目或数据集引用了，删除物理文件和图片池记录
+          // 获取图片池工作空间路径
+          const { getImagePoolWorkspacePath } = await import('../utils/imagePool')
+          const workspacePath = await getImagePoolWorkspacePath()
+          
+          const deleteResult = await window.electronAPI.imagePool.deleteImage(poolImageId, workspacePath)
+          if (deleteResult && deleteResult.success) {
+            this.$message.success('图片已从项目、数据集和图片池中删除')
+          } else {
+            this.$message.warning('图片已从项目中移除，但删除图片文件失败')
+          }
         } else {
-          this.$message.success('图片已从当前项目中移除')
+          const refInfo = []
+          if (result.projectReferenceCount > 0) {
+            refInfo.push(`${result.projectReferenceCount} 个项目`)
+          }
+          if (result.datasetReferenceCount > 0) {
+            refInfo.push(`${result.datasetReferenceCount} 个数据集`)
+          }
+          if (refInfo.length > 0) {
+            this.$message.success(`图片已从当前项目中移除（仍被 ${refInfo.join('、')} 引用）`)
+          } else if (!result.success) {
+            // 检查失败，但不阻止删除
+            console.warn('检查引用失败:', result.error)
+            this.$message.warning('图片已从项目中移除，但无法确认其他引用，已删除图片文件')
+            // 仍然尝试删除图片文件
+            try {
+              const { getImagePoolWorkspacePath } = await import('../utils/imagePool')
+              const workspacePath = await getImagePoolWorkspacePath()
+              await window.electronAPI.imagePool.deleteImage(poolImageId, workspacePath)
+            } catch (error) {
+              console.error('删除图片文件失败:', error)
+            }
+          } else {
+            // 正常情况下不应该到这里
+            this.$message.success('图片已从当前项目中移除')
+          }
         }
         
         // 4. 更新本地数据

@@ -69,7 +69,7 @@ export default {
   },
   data() {
     return {
-      appVersion: '1.0.0',
+      appVersion: '1.0.1',
       manualVisible: false,
       manualHtml: ''
     }

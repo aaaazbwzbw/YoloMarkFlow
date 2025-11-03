@@ -144,16 +144,21 @@
 
       <!-- 步骤2: 选择数据集 -->
       <div v-if="importStep === 1" class="import-step">
-        <el-form label-width="100px">
-          <el-form-item label="数据集路径">
+        <el-form label-width="120px">
+          <el-form-item :label="importConfig.type === 'yolo' ? '配置文件' : 'JSON文件'">
             <el-input 
-              v-model="importConfig.datasetPath" 
-              placeholder="选择数据集目录"
+              v-model="importConfig.configFilePath" 
+              :placeholder="importConfig.type === 'yolo' ? '选择 data.yaml 文件' : '选择 annotations.json 文件'"
               readonly>
               <template #append>
-                <el-button @click="selectDatasetPath" :icon="Folder">浏览</el-button>
+                <el-button @click="selectConfigFile" :icon="Folder">浏览</el-button>
               </template>
             </el-input>
+            <div class="form-item-tip" style="margin-top: 8px;">
+              {{ importConfig.type === 'yolo' 
+                ? '请选择 data.yaml 配置文件，系统将根据配置文件中的路径自动导入图片和标注' 
+                : '请选择 annotations.json 文件，系统将根据 JSON 文件中的路径自动导入图片和标注' }}
+            </div>
           </el-form-item>
           <el-alert 
             v-if="datasetValidation.message"
@@ -177,7 +182,10 @@
           </el-form-item>
 
           <el-form-item v-if="importConfig.target === 'new'" label="项目名称">
-            <el-input v-model="importConfig.projectName" placeholder="请输入项目名称" />
+            <el-input 
+              v-model="importConfig.projectName" 
+              placeholder="请输入项目名称"
+              @input="handleProjectNameInput" />
           </el-form-item>
 
           <el-form-item v-if="importConfig.target === 'new'" label="项目路径">
@@ -274,7 +282,7 @@
 </template>
 
 <script>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { FolderAdd, DocumentAdd, FolderOpened, Folder, Upload, DataBoard, Files } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import toast from '../utils/toast'
@@ -329,6 +337,8 @@ export default {
     })
     
     const isPathManuallyEdited = ref(false) // 标记路径是否被用户手动编辑
+    // 标记用户是否手动选择了路径（如果手动选择，则项目名变化时不自动更新路径）
+    const isNewProjectPathManuallySelected = ref(false)
 
     const newProjectRules = {
       name: [
@@ -348,6 +358,7 @@ export default {
       newProjectForm.description = ''
       selectedBasePath.value = ''
       isPathManuallyEdited.value = false
+      isNewProjectPathManuallySelected.value = false
     }
 
     // 拼接路径（跨平台）
@@ -359,21 +370,34 @@ export default {
     }
 
     // 自动填充路径
-    const autoFillPath = () => {
-      // 如果路径被手动编辑过，不自动更新
-      if (isPathManuallyEdited.value) return
+    const autoFillPath = async () => {
+      // 如果路径被手动编辑过或用户手动选择了路径，不自动更新
+      if (isPathManuallyEdited.value || isNewProjectPathManuallySelected.value) {
+        return
+      }
       
-      if (newProjectForm.name) {
-        if (selectedBasePath.value) {
-          // 有基础路径，拼接项目名
-          newProjectForm.path = joinPath(selectedBasePath.value, newProjectForm.name)
-        } else {
-          // 没有基础路径，使用默认 D:\ + 项目名
-          newProjectForm.path = `D:\\${newProjectForm.name}`
+      // 如果项目名为空，清空路径
+      if (!newProjectForm.name || newProjectForm.name.trim() === '') {
+        newProjectForm.path = ''
+        return
+      }
+      
+      // 如果有手动选择的基础路径，拼接项目名
+      if (selectedBasePath.value) {
+        newProjectForm.path = joinPath(selectedBasePath.value, newProjectForm.name.trim())
+        return
+      }
+      
+      // 否则使用默认路径生成逻辑（优先D盘，否则使用应用目录）
+      try {
+        const result = await window.electronAPI.getDefaultProjectPath(newProjectForm.name.trim())
+        if (result.success && result.path) {
+          newProjectForm.path = result.path
         }
-      } else {
-        // 项目名为空
-        newProjectForm.path = selectedBasePath.value || ''
+      } catch (error) {
+        console.error('获取默认项目路径失败:', error)
+        // 降级处理：使用旧的逻辑
+        newProjectForm.path = `D:\\YoloMarkFlow\\YoloMarkFlow_item\\${newProjectForm.name.trim()}`
       }
     }
 
@@ -381,6 +405,8 @@ export default {
     const selectPath = async () => {
       const selectedPath = await window.electronAPI.selectProjectDirectory()
       if (selectedPath) {
+        // 标记用户已手动选择路径
+        isNewProjectPathManuallySelected.value = true
         selectedBasePath.value = selectedPath
         // 浏览选择的路径，自动拼接项目名
         if (newProjectForm.name) {
@@ -436,6 +462,13 @@ export default {
           // 设置为当前项目
           setCurrentProject(config)
           addToRecentProjects(config)
+
+          // 注册项目路径
+          try {
+            await window.electronAPI.project.register(newProjectForm.path)
+          } catch (error) {
+            console.warn('注册项目路径失败:', error)
+          }
 
           toast.success('项目创建成功！')
           newProjectDialogVisible.value = false
@@ -588,16 +621,28 @@ export default {
     
     const importConfig = reactive({
       type: 'coco', // 'coco' | 'yolo'
-      datasetPath: '',
+      configFilePath: '', // 配置文件路径（data.yaml 或 annotations.json）
+      datasetPath: '', // 向后兼容：数据集目录
       target: 'new', // 'new' | 'current'
       projectName: '',
       projectPath: '',
       copyImages: true
     })
+    
+    // 标记用户是否手动选择了路径（如果手动选择，则项目名变化时不自动更新路径）
+    const isPathManuallySelected = ref(false)
 
     const datasetValidation = reactive({
       valid: false,
       message: ''
+    })
+    
+    // 监听项目名称变化，自动生成路径
+    watch(() => importConfig.projectName, async (newName) => {
+      // 只在新项目模式下且未手动选择路径时自动生成
+      if (importConfig.target === 'new' && !isPathManuallySelected.value) {
+        await handleProjectNameInput()
+      }
     })
 
     const importProgress = reactive({
@@ -634,6 +679,10 @@ export default {
     })
 
     const canStartImport = computed(() => {
+      // 必须选择配置文件
+      if (!importConfig.configFilePath) {
+        return false
+      }
       if (importConfig.target === 'new') {
         return importConfig.projectName && importConfig.projectPath
       }
@@ -650,11 +699,13 @@ export default {
     // 重置导入配置
     const resetImportConfig = () => {
       importConfig.type = 'coco'
-      importConfig.datasetPath = ''
+      importConfig.configFilePath = ''
+      importConfig.datasetPath = '' // 向后兼容
       importConfig.target = hasCurrentProject.value ? 'current' : 'new'
       importConfig.projectName = ''
       importConfig.projectPath = ''
       importConfig.copyImages = true
+      isPathManuallySelected.value = false
       datasetValidation.valid = false
       datasetValidation.message = ''
       importProgress.percent = 0
@@ -672,21 +723,28 @@ export default {
       importErrors.value = []
     }
 
-    // 选择数据集路径
-    const selectDatasetPath = async () => {
-      const result = await window.electronAPI.selectDirectory({
-        title: '选择数据集目录'
+    // 选择配置文件
+    const selectConfigFile = async () => {
+      const fileExtensions = importConfig.type === 'yolo' 
+        ? ['.yaml', '.yml']
+        : ['.json']
+      
+      const result = await window.electronAPI.selectFile({
+        title: importConfig.type === 'yolo' ? '选择 data.yaml 文件' : '选择 annotations.json 文件',
+        filters: [
+          { name: importConfig.type === 'yolo' ? 'YAML文件' : 'JSON文件', extensions: fileExtensions.map(ext => ext.substring(1)) }
+        ]
       })
       
-      if (result.success && result.directory) {
-        importConfig.datasetPath = result.directory
+      if (result.success && result.filePaths && result.filePaths.length > 0) {
+        importConfig.configFilePath = result.filePaths[0]
         await validateDataset()
       }
     }
 
     // 验证数据集
     const validateDataset = async () => {
-      if (!importConfig.datasetPath) {
+      if (!importConfig.configFilePath) {
         datasetValidation.valid = false
         datasetValidation.message = ''
         return
@@ -697,7 +755,7 @@ export default {
           ? new CocoImporter() 
           : new YoloImporter()
         
-        const validation = await importer.validateDataset(importConfig.datasetPath)
+        const validation = await importer.validateDataset(importConfig.configFilePath)
         datasetValidation.valid = validation.valid
         datasetValidation.message = validation.message || '数据集验证通过'
       } catch (error) {
@@ -706,6 +764,30 @@ export default {
       }
     }
 
+    // 处理项目名称输入（自动生成路径）
+    const handleProjectNameInput = async () => {
+      // 如果用户已经手动选择了路径，则不再自动更新
+      if (isPathManuallySelected.value) {
+        return
+      }
+      
+      // 如果项目名为空，清空路径
+      if (!importConfig.projectName || importConfig.projectName.trim() === '') {
+        importConfig.projectPath = ''
+        return
+      }
+      
+      // 自动生成路径
+      try {
+        const result = await window.electronAPI.getDefaultProjectPath(importConfig.projectName.trim())
+        if (result.success && result.path) {
+          importConfig.projectPath = result.path
+        }
+      } catch (error) {
+        console.error('获取默认项目路径失败:', error)
+      }
+    }
+    
     // 选择项目路径
     const selectProjectPath = async () => {
       const result = await window.electronAPI.selectDirectory({
@@ -713,6 +795,9 @@ export default {
       })
       
       if (result.success && result.directory) {
+        // 标记用户已手动选择路径
+        isPathManuallySelected.value = true
+        
         if (importConfig.projectName) {
           importConfig.projectPath = `${result.directory}\\${importConfig.projectName}`
         } else {
@@ -723,14 +808,7 @@ export default {
 
     // 下一步
     const nextImportStep = async () => {
-      if (importStep.value === 1) {
-        // 从步骤2到步骤3时，如果是创建新项目，自动填充项目名
-        if (importConfig.target === 'new' && !importConfig.projectName) {
-          // 从数据集路径提取项目名
-          const pathParts = importConfig.datasetPath.split(/[\\/]/)
-          importConfig.projectName = pathParts[pathParts.length - 1] || 'Imported_Project'
-        }
-      }
+      // 不再自动填充项目名，由用户手动填写
       importStep.value++
     }
 
@@ -776,6 +854,13 @@ export default {
           // 设置为当前项目
           setCurrentProject(config)
           addToRecentProjects(config)
+
+          // 注册项目路径
+          try {
+            await window.electronAPI.project.register(projectPath)
+          } catch (error) {
+            console.warn('注册项目路径失败:', error)
+          }
         } else {
           // 使用当前项目
           const currentProject = getCurrentProject()
@@ -790,7 +875,8 @@ export default {
 
         // 执行导入
         const result = await importer.import({
-          datasetPath: importConfig.datasetPath,
+          configFilePath: importConfig.configFilePath,
+          datasetPath: importConfig.datasetPath, // 向后兼容
           projectPath: projectPath,
           projectName: projectName,
           copyImages: importConfig.copyImages,
@@ -917,9 +1003,10 @@ export default {
       canGoNextStep,
       canStartImport,
       showImportDialog,
-      selectDatasetPath,
+      selectConfigFile,
       validateDataset,
       selectProjectPath,
+      handleProjectNameInput,
       nextImportStep,
       startImport,
       finishImport,

@@ -86,9 +86,12 @@ export async function listDatasets() {
  * @param {string} name - 数据集名称
  * @param {Array<Object>} projectSelections - 项目选择
  *   格式: [{ projectPath: string, projectName: string, categoryIds: number[] }]
+ * @param {Object} options - 选项
+ * @param {Function} options.onProgress - 进度回调函数 (current, total, message) => void
  * @returns {Promise<Object>} 创建结果
  */
-export async function createDataset(name, projectSelections) {
+export async function createDataset(name, projectSelections, options = {}) {
+  const { onProgress } = options
   const openedDatabases = [] // 记录所有打开的数据库
   
   try {
@@ -139,12 +142,23 @@ export async function createDataset(name, projectSelections) {
     
     // 获取项目名称映射
     const projectNames = {}
-    for (const selection of projectSelections) {
+    onProgress?.(0, projectSelections.length, '正在读取项目信息...')
+    for (let i = 0; i < projectSelections.length; i++) {
+      const selection = projectSelections[i]
       const configResult = await window.electronAPI.readProjectConfig(selection.projectPath)
       if (configResult.success) {
         projectNames[selection.projectPath] = configResult.config.name
       }
+      onProgress?.(i + 1, projectSelections.length, `正在读取项目信息 ${i + 1}/${projectSelections.length}...`)
     }
+    
+    // 计算总任务数（项目数 + 类别数 + 标注数）
+    let totalTasks = 0
+    for (const selection of projectSelections) {
+      totalTasks += selection.categoryIds.length
+    }
+    
+    let completedTasks = 0
     
     for (const selection of projectSelections) {
       const { projectPath, categoryIds } = selection
@@ -157,6 +171,9 @@ export async function createDataset(name, projectSelections) {
       
       // 复制选中的类别
       for (const categoryId of categoryIds) {
+        completedTasks++
+        onProgress?.(completedTasks, totalTasks, `正在处理类别 ${completedTasks}/${totalTasks}：${projectName}...`)
+        
         // 查询类别信息
         const catResult = await window.electronAPI.querySQL(
           projectDbPath,
@@ -197,6 +214,8 @@ export async function createDataset(name, projectSelections) {
           if (annotationsResult.data && annotationsResult.data.length > 0) {
             // 收集所有涉及的image_id（去重）
             const imageIds = [...new Set(annotationsResult.data.map(ann => ann.image_id))]
+            
+            onProgress?.(completedTasks, totalTasks, `正在处理图片和标注：${category.name} (${imageIds.length} 张图片, ${annotationsResult.data.length} 个标注)...`)
             
             // 对每个image_id，插入dataset_images（如果还未插入）
             for (const imageId of imageIds) {
@@ -250,6 +269,8 @@ export async function createDataset(name, projectSelections) {
     }
     
     // 5. 保存元数据
+    onProgress?.(totalTasks, totalTasks, '正在保存元数据...')
+    
     const metadata = {
       name,
       version: 1,
@@ -790,23 +811,123 @@ export async function deleteDatasetVersion(datasetName, versionToDelete) {
   }
 }
 
-export async function deleteDataset(datasetName) {
+export async function deleteDataset(datasetName, options = {}) {
+  const { deleteOrphanedImages = true, onProgress } = options
+  
   try {
     const datasetsPath = await getDatasetsPath()
     const datasetPath = `${datasetsPath}/${datasetName}`
     const dbPath = `${datasetPath}/annotations.db`
     
-    // 1. 关闭所有数据库连接
+    // 0. 检查数据集是否有多个版本
+    let hasMultipleVersions = false
+    try {
+      const metadataPath = `${datasetPath}/metadata.json`
+      const metadataResult = await window.electronAPI.readJSON(metadataPath)
+      if (metadataResult.success && metadataResult.data) {
+        const metadata = metadataResult.data
+        const currentVersion = metadata.version || 1
+        const updateHistory = metadata.updateHistory || []
+        // 检查是否有备份版本文件
+        const allVersions = new Set([currentVersion])
+        updateHistory.forEach(h => {
+          if (h.version) allVersions.add(h.version)
+          if (h.previousVersion) allVersions.add(h.previousVersion)
+        })
+        hasMultipleVersions = allVersions.size > 1
+        console.log(`数据集 "${datasetName}" 版本数: ${allVersions.size}, 是否多版本: ${hasMultipleVersions}`)
+      }
+    } catch (error) {
+      console.warn('读取数据集元数据失败，假设只有一个版本:', error)
+    }
+    
+    // 1. 扫描孤立图片（如果需要删除未被引用的图片）
+    // 如果数据集有多个版本，直接删除数据集，不需要扫描引用（因为其他版本可能还在引用这些图片）
+    let orphanedImageIds = []
+    if (deleteOrphanedImages && !hasMultipleVersions) {
+      // 只有单个版本时，才扫描引用
+      try {
+        console.log(`[deleteDataset] 开始扫描数据集 "${datasetName}" 的孤立图片...`)
+        const { findOrphanedImagesInDataset } = await import('./imagePool')
+        orphanedImageIds = await findOrphanedImagesInDataset(datasetPath)
+        console.log(`[deleteDataset] 数据集 "${datasetName}" (单版本) 扫描完成，发现 ${orphanedImageIds.length} 张孤立图片`)
+        
+        // 如果发现有孤立图片，再次验证一下，确保没有被项目引用
+        if (orphanedImageIds.length > 0) {
+          console.log(`[deleteDataset] 警告：准备删除 ${orphanedImageIds.length} 张图片，请确认这些图片确实没有被项目引用`)
+          // 可以在这里添加额外的验证逻辑
+        }
+      } catch (error) {
+        console.error('[deleteDataset] 扫描孤立图片失败:', error)
+        // 如果扫描失败，为了安全起见，不删除任何图片
+        orphanedImageIds = []
+      }
+    } else if (hasMultipleVersions) {
+      console.log(`[deleteDataset] 数据集 "${datasetName}" 有多个版本，删除数据集时不扫描引用`)
+    }
+    
+    // 2. 删除孤立图片（如果有），显示进度
+    // 在删除数据集之前，先删除孤立图片（因为删除数据集后需要关闭数据库）
+    // 在删除之前，再次验证每个图片是否真的没有被引用（双重保险）
+    let deletedImageCount = 0
+    if (deleteOrphanedImages && orphanedImageIds.length > 0) {
+      try {
+        console.log(`[deleteDataset] 准备删除 ${orphanedImageIds.length} 张图片，先进行二次验证...`)
+        
+        // 二次验证：对每个图片使用 checkImageReferences 再次确认（此时数据集还在，可以检查引用）
+        const verifiedOrphanedImageIds = []
+        for (const imageId of orphanedImageIds) {
+          try {
+            const checkResult = await window.electronAPI.imagePool.checkImageReferences(imageId)
+            if (checkResult.success) {
+              if (checkResult.referenceCount === 0) {
+                verifiedOrphanedImageIds.push(imageId)
+                console.log(`[deleteDataset] 图片 ${imageId} 二次验证通过，确实未被引用`)
+              } else {
+                console.warn(`[deleteDataset] 图片 ${imageId} 二次验证失败：仍有 ${checkResult.referenceCount} 个引用（项目=${checkResult.projectReferenceCount}, 数据集=${checkResult.datasetReferenceCount}），跳过删除`)
+              }
+            } else {
+              console.error(`[deleteDataset] 图片 ${imageId} 二次验证失败：${checkResult.error}，为安全起见跳过删除`)
+            }
+          } catch (error) {
+            console.error(`[deleteDataset] 图片 ${imageId} 二次验证异常:`, error, '为安全起见跳过删除')
+          }
+        }
+        
+        console.log(`[deleteDataset] 二次验证完成：${orphanedImageIds.length} 张图片中，${verifiedOrphanedImageIds.length} 张通过验证，${orphanedImageIds.length - verifiedOrphanedImageIds.length} 张被跳过`)
+        
+        if (verifiedOrphanedImageIds.length > 0) {
+          const { deleteOrphanedImages: deleteImages } = await import('./imagePool')
+          
+          const deleteResult = await deleteImages(verifiedOrphanedImageIds, (current, total, message) => {
+            onProgress?.(current, total, message || `正在删除图片 ${current}/${total}...`)
+          })
+          
+          deletedImageCount = deleteResult.deletedCount || 0
+          
+          if (deleteResult.errors && deleteResult.errors.length > 0) {
+            console.warn(`[deleteDataset] ${deleteResult.errors.length} 张图片删除失败`)
+          }
+        } else {
+          console.log(`[deleteDataset] 所有图片都有引用，跳过删除`)
+        }
+      } catch (error) {
+        console.error('[deleteDataset] 删除孤立图片失败:', error)
+        // 不抛出错误，继续删除数据集
+      }
+    }
+    
+    // 3. 关闭所有数据库连接（在删除图片之后）
     try {
       await window.electronAPI.closeAllDatabases()
     } catch (closeError) {
       console.warn('关闭数据库连接失败:', closeError)
     }
     
-    // 2. 等待 500ms 确保文件句柄释放
+    // 4. 等待 500ms 确保文件句柄释放
     await new Promise(resolve => setTimeout(resolve, 500))
     
-    // 3. 尝试删除数据集目录（带简单重试）
+    // 5. 尝试删除数据集目录（带简单重试）
     let deleteResult = await window.electronAPI.deleteDirectory(datasetPath)
     
     // 如果失败且是文件锁定错误，重试一次
@@ -832,7 +953,8 @@ export async function deleteDataset(datasetName) {
     }
     
     return {
-      success: true
+      success: true,
+      deletedImageCount
     }
   } catch (error) {
     console.error('删除数据集失败:', error)
