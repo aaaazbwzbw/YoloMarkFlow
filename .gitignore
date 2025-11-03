@@ -1,0 +1,110 @@
+# Dependencies
+node_modules/
+# package-lock.json  # 保留在仓库中以确保依赖版本一致性
+
+# Build outputs
+dist/
+dist-electron/
+out/
+
+# Development
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Electron
+*.exe
+*.dmg
+*.AppImage
+
+# Local database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Workspace data
+annotation_workspace/
+yolomarkflow_training/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Python models (闭源)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+
+# 训练脚本（闭源 - 不上传到开源仓库，但这些目录已经被移除）
+
+# 训练插件目录（闭源 - 但保留插件目录结构供用户自行添加插件）
+plugins/*
+!plugins/.gitkeep
+!plugins/README.md
+
+# 推理服务（如果需要闭源）
+# electron/inferenceService.js  # 取消注释以闭源
+# electron/trainingController.js  # 取消注释以闭源
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# OS files
+Thumbs.db
+desktop.ini
+
+# Test files
+test/
+tests/
+*.test.js
+*.spec.js
+
+# Sensitive files
+.env
+.env.local
+.env.*.local
+secrets.json
+config.local.js
+
+# Build artifacts
+*.tgz
+*.zip
+*.tar.gz
+
+# Coverage
+coverage/
+.nyc_output/
+
+# User uploaded images (sample data is ok, but not user data)
+[object Object]/
+
+# Training outputs
+runs/
+weights/
+results/

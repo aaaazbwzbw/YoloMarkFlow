@@ -1,0 +1,70 @@
+/* VS Code风格主题变量 */
+
+/* 浅色主题（默认） */
+:root {
+  /* 背景色 */
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f3f3f3;
+  --color-bg-tertiary: #e8e8e8;
+  
+  /* 文本色 */
+  --color-text-primary: #3c3c3c;
+  --color-text-secondary: #616161;
+  --color-text-tertiary: #8e8e8e;
+  
+  /* 边框色 */
+  --color-border: #d4d4d4;
+  --color-border-light: #e5e5e5;
+  
+  /* 状态色 */
+  --color-info: #0078d4;
+  --color-success: #107c10;
+  --color-warning: #ca5010;
+  --color-danger: #d13438;
+  
+  /* 遮罩 */
+  --color-overlay: rgba(0, 0, 0, 0.4);
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* 深色主题 */
+body[data-theme="dark"] {
+  /* 背景色 */
+  --color-bg-primary: #1e1e1e;
+  --color-bg-secondary: #252526;
+  --color-bg-tertiary: #2d2d30;
+  
+  /* 文本色 */
+  --color-text-primary: #cccccc;
+  --color-text-secondary: #9d9d9d;
+  --color-text-tertiary: #6d6d6d;
+  
+  /* 边框色 */
+  --color-border: #3c3c3c;
+  --color-border-light: #2d2d30;
+  
+  /* 状态色 */
+  --color-info: #0078d4;
+  --color-success: #107c10;
+  --color-warning: #ca5010;
+  --color-danger: #d13438;
+  
+  /* 遮罩 */
+  --color-overlay: rgba(0, 0, 0, 0.6);
+  
+  /* 阴影 */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+/* 全局应用主题变量 */
+body {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  transition: background-color 0.2s, color 0.2s;
+}
