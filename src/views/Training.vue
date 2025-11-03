@@ -11,16 +11,43 @@
         <div class="training-queue">
           <div class="queue-header">
             <h3>训练队列</h3>
-            <el-button type="primary" size="small" @click="showNewTrainingDialog">
+            <el-button type="primary" size="small" @click="showNewTrainingDialog" :disabled="!hasTrainingPlugin">
               <el-icon><Plus /></el-icon>
               新建训练
             </el-button>
           </div>
           
           <div class="queue-content">
-            <div v-if="runningTasks.length === 0" class="empty-queue">
-              <el-empty description="暂无训练任务">
-                <el-button type="primary" @click="showNewTrainingDialog">
+            <!-- 显示加载状态 -->
+            <div v-if="isCheckingPlugin" class="empty-queue">
+              <el-empty description="检查插件中..." :image-size="120" />
+            </div>
+            <div v-else-if="runningTasks.length === 0" class="empty-queue">
+              <el-empty 
+                :description="hasTrainingPlugin ? '暂无训练任务' : '训练功能需要安装训练插件'"
+                :image-size="120">
+                <div v-if="!hasTrainingPlugin" class="plugin-tip">
+                  <el-alert
+                    :closable="false"
+                    type="info"
+                    show-icon>
+                    <template #title>
+                      <div class="alert-title">
+                        <span>训练功能需要插件支持</span>
+                      </div>
+                    </template>
+                    <template #default>
+                      <div class="alert-content">
+                        <p class="tip-text">请先在设置页面导入训练插件</p>
+                        <el-button type="primary" @click="goToSettings">
+                          <el-icon><Setting /></el-icon>
+                          前往设置
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-alert>
+                </div>
+                <el-button v-else type="primary" @click="showNewTrainingDialog">
                   开始第一个训练任务
                 </el-button>
               </el-empty>
@@ -161,7 +188,7 @@
 </template>
 
 <script>
-import { Plus, Refresh, MoreFilled, Download, DataAnalysis, FolderOpened, DArrowLeft, DArrowRight, Delete } from '@element-plus/icons-vue'
+import { Plus, Refresh, MoreFilled, Download, DataAnalysis, FolderOpened, DArrowLeft, DArrowRight, Delete, Setting } from '@element-plus/icons-vue'
 import HardwareMonitor from '../components/HardwareMonitor.vue'
 import TrainingTaskCard from '../components/TrainingTaskCard.vue'
 import TrainingConfigPanel from '../components/TrainingConfigPanel.vue'
@@ -183,6 +210,7 @@ export default {
     DArrowLeft,
     DArrowRight,
     Delete,
+    Setting,
     HardwareMonitor,
     TrainingTaskCard,
     TrainingConfigPanel,
@@ -200,7 +228,9 @@ export default {
       evaluationDialogVisible: false,
       evaluationData: null,
       evaluationLoading: false,
-      currentEvaluationTask: null
+      currentEvaluationTask: null,
+      hasTrainingPlugin: false,
+      isCheckingPlugin: true
     }
   },
   computed: {
@@ -249,6 +279,9 @@ export default {
   methods: {
     async init() {
       try {
+        // 检查是否有训练插件
+        await this.checkTrainingPlugin()
+        
         // 初始化训练管理器
         await trainingManager.init()
         this.tasks = trainingManager.getAllTasks()
@@ -264,6 +297,25 @@ export default {
         console.error('Failed to initialize training page:', error)
         this.$message.error('初始化失败')
       }
+    },
+    async checkTrainingPlugin() {
+      try {
+        const result = await window.electronAPI.plugin.getAll()
+        if (result.success && result.plugins) {
+          // 检查是否有训练相关的插件
+          this.hasTrainingPlugin = result.plugins.some(plugin => 
+            plugin.name && plugin.name.toLowerCase().includes('training')
+          )
+        }
+      } catch (error) {
+        console.error('Failed to check training plugin:', error)
+        this.hasTrainingPlugin = false
+      } finally {
+        this.isCheckingPlugin = false
+      }
+    },
+    goToSettings() {
+      this.$router.push('/settings')
     },
     setupEventListeners() {
       trainingManager.on('statusChange', this.handleStatusChange)
@@ -988,5 +1040,38 @@ export default {
   background: var(--color-bg-tertiary);
   border-color: var(--color-border);
   color: #e0e0e0;
+}
+
+/* 插件提示样式 */
+.plugin-tip {
+  width: 100%;
+  max-width: 600px;
+  margin: 20px auto 0;
+}
+
+.alert-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.alert-content {
+  margin-top: 8px;
+}
+
+.tip-text {
+  margin: 0 0 12px 0;
+  color: #b0b0b0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+:deep(.el-alert__content) {
+  width: 100%;
+}
+
+:deep(.el-alert--info) {
+  background-color: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-info);
 }
 </style>

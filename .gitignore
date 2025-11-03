@@ -70,6 +70,9 @@ plugins/*
 # electron/inferenceService.js  # 取消注释以闭源
 # electron/trainingController.js  # 取消注释以闭源
 
+# 闭源训练页面（如有需要可取消注释）
+# src/views/Training.privacy.vue
+
 # Temporary files
 *.tmp
 *.temp
