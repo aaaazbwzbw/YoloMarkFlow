@@ -69,98 +69,10 @@
       <span></span>
     </ProjectDialog>
     
-    <!-- 删除进度对话框 -->
-    <Modal 
-      v-model="deleteProgressVisible" 
-      title="正在删除"
-      :show-footer="false"
-      :show-close="false"
-      :close-on-overlay="false">
-      <div class="delete-progress-content">
-        <el-progress 
-          :percentage="deleteProgress.percent" 
-          :status="deleteProgress.status"
-          :stroke-width="20">
-        </el-progress>
-        <p class="progress-message">{{ deleteProgress.message }}</p>
-        
-        <div v-if="deleteProgress.status === 'success'" class="delete-result">
-          <div class="result-stats">
-            <p v-if="deleteProgress.stats.deletedCount > 0" class="stat-item success">
-              ✓ 已删除 {{ deleteProgress.stats.deletedCount }} 张图片
-            </p>
-            <p v-if="deleteProgress.stats.skippedCount > 0" class="stat-item info">
-              ⚠ 跳过 {{ deleteProgress.stats.skippedCount }} 张（不存在于图片池）
-            </p>
-            <p v-if="deleteProgress.stats.errorCount > 0" class="stat-item error">
-              ✗ {{ deleteProgress.stats.errorCount }} 张删除失败
-            </p>
-          </div>
-          <div class="result-actions">
-            <el-button type="primary" @click="closeDeleteProgress">确定</el-button>
-          </div>
-        </div>
-        
-        <div v-if="deleteProgress.status === 'exception'" class="delete-result">
-          <p class="error-message">{{ deleteProgress.error }}</p>
-          <div class="result-actions">
-            <el-button @click="closeDeleteProgress">确定</el-button>
-          </div>
-        </div>
-      </div>
-    </Modal>
   </div>
 </template>
 
 <style scoped>
-.delete-progress-content {
-  padding: 20px;
-  text-align: center;
-}
-
-.progress-message {
-  margin-top: 16px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-}
-
-.delete-result {
-  margin-top: 24px;
-}
-
-.result-stats {
-  text-align: left;
-  margin-bottom: 20px;
-}
-
-.stat-item {
-  padding: 8px 0;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.stat-item.success {
-  color: var(--color-success);
-}
-
-.stat-item.info {
-  color: var(--color-warning);
-}
-
-.stat-item.error {
-  color: var(--color-danger);
-}
-
-.error-message {
-  color: var(--color-danger);
-  margin-bottom: 20px;
-}
-
-.result-actions {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-}
 </style>
 
 <script>
@@ -168,9 +80,9 @@ import { ref, computed } from 'vue'
 import { Folder, ArrowDown, ArrowUp, DocumentAdd, FolderOpened, Clock, Close, Upload, Delete } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import ProjectDialog from './ProjectDialog.vue'
-import Modal from './Modal.vue'
 import toast from '../utils/toast'
 import { getRecentProjects, clearCurrentProject, removeFromRecentProjects } from '../utils/projectManager'
+import { showLoading } from '../utils/loading'
 
 export default {
   name: 'ProjectDropdown',
@@ -184,8 +96,7 @@ export default {
     Close,
     Upload,
     Delete,
-    ProjectDialog,
-    Modal
+    ProjectDialog
   },
   props: {
     project: {
@@ -198,38 +109,6 @@ export default {
     const projectDialogRef = ref(null)
     const showAllRecent = ref(false)
     
-    // 删除进度对话框
-    const deleteProgressVisible = ref(false)
-    const deleteProgress = ref({
-      percent: 0,
-      message: '正在删除...',
-      status: '', // '', 'success', 'exception'
-      error: '',
-      stats: {
-        deletedCount: 0,
-        skippedCount: 0,
-        errorCount: 0
-      }
-    })
-    
-    const closeDeleteProgress = () => {
-      deleteProgressVisible.value = false
-      // 重置进度状态
-      deleteProgress.value = {
-        percent: 0,
-        message: '正在删除...',
-        status: '',
-        error: '',
-        stats: {
-          deletedCount: 0,
-          skippedCount: 0,
-          errorCount: 0
-        }
-      }
-      
-      // 如果是在删除项目流程中，关闭对话框后跳转到欢迎页
-      // 注意：这会在项目删除完成后调用
-    }
     
     const recentProjects = computed(() => {
       const recent = getRecentProjects()
@@ -382,52 +261,57 @@ export default {
 
         // 2. 删除孤立图片（如果有），显示进度（必须在关闭数据库之前）
         // 注意：删除孤立图片需要使用图片池数据库，所以要先删除图片，再关闭数据库
+        let closeLoading = null
+        let deleteStats = {
+          deletedCount: 0,
+          skippedCount: 0,
+          errorCount: 0
+        }
+        
         if (deleteOrphanedImages && orphanedImageIds.length > 0) {
-          // 显示删除进度对话框
-          deleteProgressVisible.value = true
-          deleteProgress.value = {
-            percent: 0,
-            message: `正在删除图片 0/${orphanedImageIds.length}...`,
-            status: '',
-            error: '',
-            stats: {
-              deletedCount: 0,
-              skippedCount: 0,
-              errorCount: 0
-            }
-          }
+          // 显示删除进度遮罩层
+          closeLoading = showLoading(`正在删除图片 0/${orphanedImageIds.length}...`)
           
           try {
             const { deleteOrphanedImages: deleteImages } = await import('../utils/imagePool')
             
             const deleteResult = await deleteImages(orphanedImageIds, (current, total, message) => {
-              // 更新进度
-              const percent = Math.round((current / total) * 100)
-              deleteProgress.value.percent = percent
-              deleteProgress.value.message = message || `正在删除图片 ${current}/${total}...`
+              // 更新进度消息
+              const progressMessage = message || `正在删除图片 ${current}/${total}...`
+              closeLoading(progressMessage)
             })
             
-            // 更新删除结果
-            deleteProgress.value.percent = 100
-            deleteProgress.value.status = 'success'
-            deleteProgress.value.message = '删除完成'
-            deleteProgress.value.stats = {
+            deleteStats = {
               deletedCount: deleteResult.deletedCount || 0,
               skippedCount: deleteResult.skippedCount || 0,
               errorCount: (deleteResult.errors && deleteResult.errors.length) || 0
             }
             
-            // 不再显示单独的 toast，进度对话框会显示详细结果
+            // 关闭遮罩层
+            closeLoading()
+            closeLoading = null
+            
+            // 显示删除结果（如果有错误）
+            if (deleteStats.errorCount > 0) {
+              toast.warning(`部分图片删除失败（${deleteStats.errorCount} 张），但将继续删除项目`)
+            }
           } catch (error) {
             console.error('删除孤立图片失败:', error)
-            deleteProgress.value.status = 'exception'
-            deleteProgress.value.error = error.message || '删除图片失败'
-            deleteProgress.value.message = '删除失败'
+            if (closeLoading) {
+              closeLoading()
+              closeLoading = null
+            }
             toast.warning('部分图片删除失败，但将继续删除项目')
           }
+        } else {
+          // 如果没有需要删除的图片，显示删除项目遮罩层
+          closeLoading = showLoading('正在删除项目...')
         }
 
         // 3. 关闭所有数据库连接（在删除图片之后）
+        if (closeLoading) {
+          closeLoading('正在关闭数据库连接...')
+        }
         try {
           await window.electronAPI.closeAllDatabases()
         } catch (error) {
@@ -435,39 +319,93 @@ export default {
         }
 
         // 4. 等待确保所有文件句柄释放（Windows需要更长时间）
+        if (closeLoading) {
+          closeLoading('正在释放文件句柄...')
+        }
         await new Promise(resolve => setTimeout(resolve, 800))
 
-            // 5. 注销项目路径
-            try {
-              await window.electronAPI.project.unregister(projectPath)
-            } catch (error) {
-              console.warn('注销项目路径失败:', error)
-            }
+        // 5. 注销项目路径
+        if (closeLoading) {
+          closeLoading('正在注销项目...')
+        }
+        try {
+          await window.electronAPI.project.unregister(projectPath)
+        } catch (error) {
+          console.warn('注销项目路径失败:', error)
+        }
 
-            // 6. 删除项目目录
-            const deleteResult = await window.electronAPI.deleteProject(projectPath)
-            
-            if (!deleteResult.success) {
-              throw new Error(deleteResult.error)
-            }
+        // 6. 删除项目目录
+        if (closeLoading) {
+          closeLoading('正在删除项目目录...')
+        }
+        const deleteResult = await window.electronAPI.deleteProject(projectPath)
+        
+        if (!deleteResult.success) {
+          throw new Error(deleteResult.error)
+        }
 
-        // 6. 从最近项目列表中移除
+        // 7. 从最近项目列表中移除
         removeFromRecentProjects(projectPath)
 
-        // 5. 清除当前项目
+        // 8. 清除当前项目
         clearCurrentProject()
+        
+        // 9. 通知 App.vue 更新项目状态（触发 project-changed 事件）
+        emit('project-changed', null)
+        
+        // 同时触发全局项目变化事件，确保所有组件都能收到通知
+        window.dispatchEvent(new CustomEvent('project-changed', { detail: null }))
 
-        // 如果没有显示删除进度对话框（即没有需要删除的图片），直接显示成功消息并跳转
-        if (!deleteProgressVisible.value) {
-          toast.success(`项目 "${projectName}" 已删除`)
-          setTimeout(() => {
-            window.location.hash = '#/welcome'
-          }, 100)
+        // 10. 关闭遮罩层
+        if (closeLoading) {
+          closeLoading()
+          closeLoading = null
         }
-        // 如果显示了删除进度对话框，等待用户点击确定后再关闭（进度对话框会自动显示结果）
-        // 跳转逻辑会在 closeDeleteProgress 中处理（如果需要）
+
+        // 11. 显示删除结果对话框
+        let resultMessage = `<div style="line-height: 1.8;">
+          <p style="margin-bottom: 12px;">项目 "${projectName}" 已删除</p>`
+        
+        if (deleteOrphanedImages && deleteStats.deletedCount > 0) {
+          resultMessage += `<div style="margin-top: 16px;">
+            <p><strong>统计信息：</strong></p>
+            <ul style="margin: 8px 0 0 20px; padding: 0;">`
+          
+          if (deleteStats.deletedCount > 0) {
+            resultMessage += `<li>已删除图片：${deleteStats.deletedCount} 张</li>`
+          }
+          if (deleteStats.skippedCount > 0) {
+            resultMessage += `<li>跳过图片：${deleteStats.skippedCount} 张（不存在于图片池）</li>`
+          }
+          if (deleteStats.errorCount > 0) {
+            resultMessage += `<li style="color: #F56C6C;">删除失败：${deleteStats.errorCount} 张</li>`
+          }
+          
+          resultMessage += `</ul></div>`
+        }
+        
+        resultMessage += `</div>`
+
+        await ElMessageBox({
+          title: '删除成功',
+          message: resultMessage,
+          dangerouslyUseHTMLString: true,
+          confirmButtonText: '确定',
+          type: 'success'
+        })
+
+        // 12. 跳转到欢迎页
+        setTimeout(() => {
+          window.location.hash = '#/welcome'
+        }, 100)
 
       } catch (error) {
+        // 关闭遮罩层（如果还在显示）
+        if (closeLoading) {
+          closeLoading()
+          closeLoading = null
+        }
+        
         if (error === 'cancel') {
           // 用户取消删除
           return
@@ -488,9 +426,6 @@ export default {
     return {
       projectDialogRef,
       showAllRecent,
-      deleteProgressVisible,
-      deleteProgress,
-      closeDeleteProgress,
       recentProjects,
       displayedRecentProjects,
       handleCommand,

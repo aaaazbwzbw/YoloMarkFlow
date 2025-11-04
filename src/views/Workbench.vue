@@ -33,27 +33,37 @@
       <div v-if="filteredImages.length === 0" class="empty-state">
         <el-empty description="暂无图片" />
       </div>
-      <RecycleScroller
+      <div 
         v-else
-        ref="thumbnailList"
-        :key="`scroller-${filterStatus}`"
-        class="thumbnail-list"
-        :class="{ 'grid-expanded': imageListExpanded }"
-        :items="gridRows"
-        :item-size="estimatedItemHeight"
-        :buffer="200"
-        key-field="rowIndex"
-      >
+        ref="thumbnailListContainer"
+        class="thumbnail-list-container"
+        @mousedown="handleImageListMouseDown"
+        @mousemove="handleImageListMouseMove"
+        @mouseup="handleImageListMouseUp"
+        @mouseleave="handleImageListMouseLeave">
+        <RecycleScroller
+          ref="thumbnailList"
+          :key="`scroller-${filterStatus}`"
+          class="thumbnail-list"
+          :class="{ 'grid-expanded': imageListExpanded }"
+          :items="gridRows"
+          :item-size="estimatedItemHeight"
+          :buffer="200"
+          key-field="rowIndex">
         <template #default="{ item: row }">
           <div class="thumbnail-row" :style="{ gridTemplateColumns: `repeat(${gridColumns}, 1fr)` }">
             <div 
               v-for="image in row.images"
               :key="image.index"
               class="thumbnail-item"
-              :class="{ active: currentImageIndex === image.index }"
+              :class="{ 
+                active: currentImageIndex === image.index,
+                selected: selectedImageIndices.has(image.index)
+              }"
               :data-image-index="image.index"
-              @click="selectImage(image.index)"
-              @contextmenu.prevent="showImageContextMenu($event, image.index)">
+              @click="handleImageClick($event, image.index)"
+              @contextmenu.prevent="showImageContextMenu($event, image.index)"
+              @mousedown.stop="handleImageItemMouseDown($event, image.index)">
               <div class="thumbnail-img-wrapper">
                 <img :src="image.src" :alt="image.name" class="thumbnail-img" loading="lazy" />
                 <!-- 状态标签 -->
@@ -62,11 +72,23 @@
                   :class="getImageStatusClass(image)">
                   {{ getImageStatusText(image) }}
                 </div>
+                <!-- 选中标记 -->
+                <div v-if="selectedImageIndices.has(image.index)" class="selection-checkbox">
+                  <el-icon><Check /></el-icon>
+                </div>
               </div>
             </div>
           </div>
         </template>
-      </RecycleScroller>
+        </RecycleScroller>
+        
+        <!-- 拖拽选择框 -->
+        <div 
+          v-if="isDraggingSelection"
+          class="selection-box"
+          :style="selectionBoxStyle">
+        </div>
+      </div>
 
         <!-- 缩略图大小控制（仅在展开时显示） -->
         <transition name="fade">
@@ -446,9 +468,9 @@
         v-if="imageContextMenuVisible" 
         class="image-context-menu"
         :style="imageContextMenuStyle">
-        <div class="context-menu-item danger" @click="confirmDeleteImage" @click.stop>
+        <div class="context-menu-item danger" @click="confirmDeleteSelectedImages" @click.stop>
           <el-icon><Delete /></el-icon>
-          <span>删除图片</span>
+          <span>{{ selectedImageIndices.size > 1 ? `删除选中图片 (${selectedImageIndices.size})` : '删除图片' }}</span>
         </div>
       </div>
 
@@ -478,7 +500,7 @@
 
 <script>
 import { markRaw } from 'vue'
-import { Loading } from '@element-plus/icons-vue'
+import { Loading, Check } from '@element-plus/icons-vue'
 import toast from '../utils/toast'
 import { getCurrentProject, fixCorruptedConfig, needsFix, clearCurrentProject } from '../utils/projectManager'
 import { AnnotationCanvas } from '../utils/canvas'
@@ -525,6 +547,12 @@ export default {
       imageContextMenuStyle: {}, // 图片右键菜单位置
       imageContextMenuTargetIndex: -1, // 右键菜单目标图片索引
       draggedClassIndex: -1, // 正在拖拽的类别索引
+      // 多选相关
+      selectedImageIndices: new Set(), // 选中的图片索引集合
+      isDraggingSelection: false, // 是否正在拖拽选择
+      selectionStartPos: null, // 选择框起始位置 { x, y }
+      selectionBoxStyle: {}, // 选择框样式
+      lastSelectedIndex: -1, // 最后一次选中的图片索引（用于Shift多选）
       presetColors: [
         '#FF6B6B', '#4ECDC4', '#FFE66D', '#95E1D3', 
         '#F38181', '#AA96DA', '#FECA57', '#48DBFB',
@@ -1055,6 +1083,11 @@ export default {
         
         console.log('数据加载完成')
         this.$message.success('数据已更新')
+        
+        // 触发数据加载完成事件，通知其他组件（如 ProjectDialog）
+        window.dispatchEvent(new CustomEvent('dataset-import-complete', {
+          detail: { success: true, isNewProject }
+        }))
       } catch (error) {
         console.error('重新加载数据失败:', error)
         this.$message.error('加载数据失败: ' + error.message)
@@ -1065,6 +1098,11 @@ export default {
         if (remaining > 0) {
           await new Promise(resolve => setTimeout(resolve, remaining))
         }
+        
+        // 触发数据加载完成事件（失败）
+        window.dispatchEvent(new CustomEvent('dataset-import-complete', {
+          detail: { success: false, error: error.message, isNewProject }
+        }))
       } finally {
         this.savingModalVisible = false
       }
@@ -1073,7 +1111,32 @@ export default {
     async handleProjectSwitchRequested(event) {
       const { newProject, needSave } = event.detail
       
-      console.log('收到项目切换请求，先保存当前项目状态...')
+      console.log('[Workbench] 收到项目切换请求', {
+        newProjectType: newProject?.type || 'detection',
+        currentProjectType: this.project?.type || 'detection'
+      })
+      
+      // 检查新项目类型，如果是分类项目，应该跳转到分类工作台
+      if (newProject && newProject.type === 'classification') {
+        console.log('[Workbench] 新项目是分类项目，应该跳转到分类工作台')
+        
+        // 先保存当前项目状态
+        if (needSave && this.project) {
+          try {
+            await this.saveWorkspaceState()
+            console.log('[Workbench] 当前项目状态已保存')
+          } catch (error) {
+            console.error('[Workbench] 保存当前项目状态失败:', error)
+          }
+        }
+        
+        // 跳转到分类工作台（分类工作台会处理项目切换）
+        window.location.hash = '#/classification'
+        return
+      }
+      
+      // 新项目是目标检测项目，在当前工作台处理
+      console.log('[Workbench] 切换到目标检测项目，在当前工作台处理')
       
       // 显示保存modal
       this.savingModalVisible = true
@@ -1086,7 +1149,7 @@ export default {
         // 1. 先保存当前项目状态
         if (needSave && this.project) {
           await this.saveWorkspaceState()
-          console.log('当前项目状态已保存')
+          console.log('[Workbench] 当前项目状态已保存')
         }
         
         // 2. 清理当前画布
@@ -1119,9 +1182,9 @@ export default {
           await new Promise(resolve => setTimeout(resolve, remaining))
         }
         
-        console.log('项目切换完成')
+        console.log('[Workbench] 项目切换完成')
       } catch (error) {
-        console.error('项目切换失败:', error)
+        console.error('[Workbench] 项目切换失败:', error)
         this.$message.error('项目切换失败')
         
         // 确保至少显示500ms
@@ -1137,6 +1200,14 @@ export default {
     
     // 处理关闭项目
     async handleCloseProject() {
+      console.log('[Workbench] 收到关闭项目请求')
+      
+      // 检查项目类型，如果是分类项目，不应该在这里处理（应该在分类工作台处理）
+      if (this.project && this.project.type === 'classification') {
+        console.log('[Workbench] 当前项目是分类项目，但当前在目标检测工作台，可能路由有误')
+        // 即使项目类型不匹配，也继续处理关闭
+      }
+      
       // 立即显示 modal，无需确认
       this.savingModalVisible = true
       this.savingModalType = 'closeProject'
@@ -1156,7 +1227,7 @@ export default {
           await new Promise(resolve => setTimeout(resolve, remaining))
         }
       } catch (error) {
-        console.error('保存工作状态失败:', error)
+        console.error('[Workbench] 保存工作状态失败:', error)
         // 即使保存失败，也至少等待500ms
         const elapsed = Date.now() - startTime
         const remaining = Math.max(0, 500 - elapsed)
@@ -1172,11 +1243,12 @@ export default {
     
     // 确认关闭项目
     confirmCloseProject() {
+      console.log('[Workbench] 确认关闭项目')
       clearCurrentProject()
       
       // 清除上次打开的项目记录
       localStorage.removeItem('lastOpenedProject')
-      console.log('已清除上次打开的项目记录')
+      console.log('[Workbench] 已清除上次打开的项目记录')
       
       // 触发全局项目变化事件
       window.dispatchEvent(new CustomEvent('project-changed', { detail: null }))
@@ -1706,7 +1778,207 @@ export default {
       this.fabricCanvas.canvas.on('annotation:rightclick', this.handleAnnotationRightClick.bind(this))
     },
     
-    // 选择图片
+    // 处理图片点击（支持多选）
+    handleImageClick(event, imageIndex) {
+      // 如果正在拖拽选择，不处理点击
+      if (this.isDraggingSelection) {
+        return
+      }
+      
+      if (event.ctrlKey || event.metaKey) {
+        // Ctrl/Cmd 点击：切换选中状态
+        if (this.selectedImageIndices.has(imageIndex)) {
+          this.selectedImageIndices.delete(imageIndex)
+          if (this.lastSelectedIndex === imageIndex) {
+            this.lastSelectedIndex = -1
+          }
+        } else {
+          this.selectedImageIndices.add(imageIndex)
+          this.lastSelectedIndex = imageIndex
+        }
+      } else if (event.shiftKey && this.lastSelectedIndex >= 0) {
+        // Shift 点击：范围选择（在 filteredImages 中进行范围选择）
+        const lastSelectedInFiltered = this.filteredImages.findIndex(img => img.index === this.lastSelectedIndex)
+        const currentInFiltered = this.filteredImages.findIndex(img => img.index === imageIndex)
+        
+        if (lastSelectedInFiltered >= 0 && currentInFiltered >= 0) {
+          const start = Math.min(lastSelectedInFiltered, currentInFiltered)
+          const end = Math.max(lastSelectedInFiltered, currentInFiltered)
+          
+          for (let i = start; i <= end; i++) {
+            if (i >= 0 && i < this.filteredImages.length) {
+              const actualIndex = this.filteredImages[i].index
+              this.selectedImageIndices.add(actualIndex)
+            }
+          }
+        }
+        this.lastSelectedIndex = imageIndex
+      } else {
+        // 普通点击：清除选中，只选中当前图片并切换到它
+        this.selectedImageIndices.clear()
+        this.selectedImageIndices.add(imageIndex)
+        this.lastSelectedIndex = imageIndex
+        this.selectImage(imageIndex)
+      }
+    },
+    
+    // 处理图片项鼠标按下（用于拖拽选择）
+    handleImageItemMouseDown(event, imageIndex) {
+      // 如果按住Ctrl/Shift，不开始拖拽选择
+      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+        return
+      }
+      
+      // 如果点击的图片已选中，不开始拖拽选择（允许拖拽已选中的项）
+      if (this.selectedImageIndices.has(imageIndex)) {
+        return
+      }
+      
+      // 开始拖拽选择
+      this.isDraggingSelection = true
+      this.selectionStartPos = {
+        x: event.clientX,
+        y: event.clientY,
+        imageIndex: imageIndex
+      }
+      
+      // 清除之前的选择，选中当前图片
+      this.selectedImageIndices.clear()
+      this.selectedImageIndices.add(imageIndex)
+      this.lastSelectedIndex = imageIndex
+      
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    
+    // 处理图片列表鼠标按下（用于拖拽选择空白区域）
+    handleImageListMouseDown(event) {
+      // 如果点击的不是空白区域（点击在图片项上），不处理
+      if (event.target.closest('.thumbnail-item')) {
+        return
+      }
+      
+      // 如果按住Ctrl/Shift，不开始拖拽选择
+      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+        return
+      }
+      
+      // 开始拖拽选择（从空白区域开始）
+      this.isDraggingSelection = true
+      this.selectionStartPos = {
+        x: event.clientX,
+        y: event.clientY,
+        imageIndex: -1
+      }
+      
+      // 获取滚动容器的位置
+      const container = this.$refs.thumbnailListContainer
+      if (container) {
+        const rect = container.getBoundingClientRect()
+        this.selectionStartPos.containerX = event.clientX - rect.left
+        this.selectionStartPos.containerY = event.clientY - rect.top
+      }
+      
+      // 清除选择
+      this.selectedImageIndices.clear()
+      this.lastSelectedIndex = -1
+      
+      event.preventDefault()
+    },
+    
+    // 处理图片列表鼠标移动（更新拖拽选择框）
+    handleImageListMouseMove(event) {
+      if (!this.isDraggingSelection || !this.selectionStartPos) {
+        return
+      }
+      
+      const container = this.$refs.thumbnailListContainer
+      if (!container) {
+        return
+      }
+      
+      const rect = container.getBoundingClientRect()
+      const startX = this.selectionStartPos.containerX || (this.selectionStartPos.x - rect.left)
+      const startY = this.selectionStartPos.containerY || (this.selectionStartPos.y - rect.top)
+      const currentX = event.clientX - rect.left
+      const currentY = event.clientY - rect.top
+      
+      // 更新选择框样式
+      const left = Math.min(startX, currentX)
+      const top = Math.min(startY, currentY)
+      const width = Math.abs(currentX - startX)
+      const height = Math.abs(currentY - startY)
+      
+      this.selectionBoxStyle = {
+        position: 'absolute',
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`
+      }
+      
+      // 更新选中的图片（找出选择框内的图片）
+      this.selectedImageIndices.clear()
+      
+      const selectionBox = {
+        left: left,
+        top: top,
+        right: left + width,
+        bottom: top + height
+      }
+      
+      // 遍历所有图片项，检查是否在选择框内
+      const imageItems = container.querySelectorAll('.thumbnail-item')
+      imageItems.forEach(item => {
+        const itemRect = item.getBoundingClientRect()
+        const itemLeft = itemRect.left - rect.left
+        const itemTop = itemRect.top - rect.top
+        const itemRight = itemLeft + itemRect.width
+        const itemBottom = itemTop + itemRect.height
+        
+        // 检查是否有重叠
+        if (
+          itemLeft < selectionBox.right &&
+          itemRight > selectionBox.left &&
+          itemTop < selectionBox.bottom &&
+          itemBottom > selectionBox.top
+        ) {
+          const imageIndex = parseInt(item.getAttribute('data-image-index'))
+          if (!isNaN(imageIndex) && imageIndex >= 0 && imageIndex < this.images.length) {
+            this.selectedImageIndices.add(imageIndex)
+          }
+        }
+      })
+      
+      event.preventDefault()
+    },
+    
+    // 处理图片列表鼠标释放（结束拖拽选择）
+    handleImageListMouseUp(event) {
+      if (this.isDraggingSelection) {
+        this.isDraggingSelection = false
+        this.selectionStartPos = null
+        this.selectionBoxStyle = {}
+        
+        // 如果只选中了一张图片，切换到它
+        if (this.selectedImageIndices.size === 1) {
+          const selectedIndex = Array.from(this.selectedImageIndices)[0]
+          this.lastSelectedIndex = selectedIndex
+          this.selectImage(selectedIndex)
+        }
+      }
+    },
+    
+    // 处理图片列表鼠标离开（结束拖拽选择）
+    handleImageListMouseLeave(event) {
+      if (this.isDraggingSelection) {
+        this.isDraggingSelection = false
+        this.selectionStartPos = null
+        this.selectionBoxStyle = {}
+      }
+    },
+    
+    // 选择图片（切换到指定图片）
     async selectImage(index) {
       // 如果是同一张图片，不处理
       if (this.currentImageIndex === index) {
@@ -2389,6 +2661,13 @@ export default {
     
     // 显示图片右键菜单
     showImageContextMenu(event, imageIndex) {
+      // 如果右键点击的图片不在选中列表中，且没有按住Ctrl/Shift，则只选中这一张
+      if (!this.selectedImageIndices.has(imageIndex) && !event.ctrlKey && !event.shiftKey) {
+        this.selectedImageIndices.clear()
+        this.selectedImageIndices.add(imageIndex)
+        this.lastSelectedIndex = imageIndex
+      }
+      
       this.imageContextMenuTargetIndex = imageIndex
       this.imageContextMenuVisible = true
       this.imageContextMenuStyle = {
@@ -2408,9 +2687,60 @@ export default {
       })
     },
     
-    // 确认删除图片
-    async confirmDeleteImage() {
-      const imageIndex = this.imageContextMenuTargetIndex
+    // 确认删除选中的图片
+    async confirmDeleteSelectedImages() {
+      const selectedIndices = Array.from(this.selectedImageIndices)
+      
+      if (selectedIndices.length === 0) {
+        // 如果没有选中，使用右键菜单的目标图片
+        const imageIndex = this.imageContextMenuTargetIndex
+        if (imageIndex >= 0 && imageIndex < this.images.length) {
+          await this.confirmDeleteSingleImage(imageIndex)
+        }
+        return
+      }
+      
+      const imageNames = selectedIndices
+        .slice(0, 3)
+        .map(index => this.images[index]?.name || `图片 ${index + 1}`)
+        .join('、')
+      const moreText = selectedIndices.length > 3 ? `等 ${selectedIndices.length} 张` : ''
+      
+      this.$confirm(
+        `确定要删除选中的 ${selectedIndices.length} 张图片吗？\n\n图片：${imageNames}${moreText}\n\n删除后将：\n1. 从当前项目中移除这些图片\n2. 删除这些图片的所有标注\n3. 如果图片不被其他项目引用，将从图片池中彻底删除`,
+        '删除确认',
+        {
+          confirmButtonText: '确定删除',
+          cancelButtonText: '取消',
+          type: 'warning',
+          dangerouslyUseHTMLString: false
+        }
+      ).then(async () => {
+        // 按索引倒序删除，避免删除后索引变化
+        const sortedIndices = [...selectedIndices].sort((a, b) => b - a)
+        
+        for (const imageIndex of sortedIndices) {
+          await this.deleteImage(imageIndex)
+        }
+        
+        // 清空选中状态
+        this.selectedImageIndices.clear()
+        this.lastSelectedIndex = -1
+        
+        // 如果当前图片被删除，切换到下一张
+        if (this.images.length > 0) {
+          const newIndex = Math.min(this.currentImageIndex, this.images.length - 1)
+          if (newIndex >= 0) {
+            await this.selectImage(newIndex)
+          }
+        }
+      }).catch(() => {})
+      
+      this.imageContextMenuVisible = false
+    },
+    
+    // 确认删除单张图片（保留向后兼容）
+    async confirmDeleteSingleImage(imageIndex) {
       if (imageIndex < 0 || imageIndex >= this.images.length) {
         return
       }
@@ -3767,13 +4097,22 @@ body[data-theme="dark"] .filter-bar :deep(.el-radio-button.is-active .el-radio-b
   flex-wrap: nowrap;
 }
 
+/* 图片列表容器 */
+.thumbnail-list-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* 允许 flex 子元素收缩 */
+}
+
 .thumbnail-list {
   flex: 1;
   overflow: hidden;
   padding: 8px;
   position: relative;
   min-height: 200px;
-  height: 100%;
   box-sizing: border-box;
 }
 
@@ -3821,7 +4160,7 @@ body[data-theme="dark"] .workbench .thumbnail-list :deep(.vue-recycle-scroller):
 
 /* RecycleScroller的item容器 */
 .thumbnail-list :deep(.vue-recycle-scroller__item-view) {
-  margin-bottom: 8px;
+  margin-bottom: 12px; /* 增加上下间距 */
   overflow: visible; /* 允许选中状态的阴影和缩放超出 */
 }
 
@@ -3831,6 +4170,11 @@ body[data-theme="dark"] .workbench .thumbnail-list :deep(.vue-recycle-scroller):
   gap: 8px;
   width: 100%;
   overflow: visible; /* 允许选中状态的阴影和缩放超出 */
+}
+
+/* 折叠状态下增加列间距 */
+.thumbnail-list:not(.grid-expanded) .thumbnail-row {
+  gap: 12px; /* 折叠状态下增加列间距 */
 }
 
 /* 缩略图列表渐变动画 */
@@ -3890,14 +4234,14 @@ body[data-theme="dark"] .thumbnail-item {
 
 .thumbnail-item:hover {
   background: var(--color-bg-tertiary, #f0f0f0);
-  border-color: var(--color-border, #d0d0d0);
+  border-color: transparent; /* hover 时保持透明边框 */
   transform: translateY(-2px);
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
 }
 
 body[data-theme="dark"] .thumbnail-item:hover {
   background: #333333;
-  border-color: #4a4a4a;
+  border-color: transparent; /* hover 时保持透明边框 */
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
@@ -3908,7 +4252,7 @@ body[data-theme="dark"] .thumbnail-item:hover {
 }
 
 .thumbnail-item.active {
-  border: 3px solid transparent;
+  border: 3px solid transparent; /* 激活状态也保持透明边框 */
   background: var(--color-bg-primary, #ffffff);
   transform: scale(1.05);
   z-index: 2;
@@ -3923,6 +4267,49 @@ body[data-theme="dark"] .thumbnail-item.active {
 .thumbnail-item.active .thumbnail-img {
   opacity: 1 !important;
   filter: grayscale(0) brightness(1) !important;
+}
+
+/* 多选选中状态 - 无边框，仅通过背景色和选中标记表示 */
+.thumbnail-item.selected {
+  border: 3px solid transparent;
+  background: rgba(64, 158, 255, 0.15);
+}
+
+body[data-theme="dark"] .thumbnail-item.selected {
+  background: rgba(64, 158, 255, 0.2);
+  border-color: transparent;
+}
+
+.thumbnail-item.selected .thumbnail-img {
+  opacity: 1 !important;
+  filter: grayscale(0) brightness(1) !important;
+}
+
+/* 同时是当前激活和选中状态 */
+.thumbnail-item.active.selected {
+  border: 3px solid transparent;
+  background: rgba(64, 158, 255, 0.2);
+}
+
+/* 选中标记 */
+.selection-checkbox {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 20px;
+  height: 20px;
+  background: #409EFF;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.selection-checkbox .el-icon {
+  color: white;
+  font-size: 14px;
 }
 
 /* 蓝色呼吸光晕效果 */
@@ -4063,6 +4450,21 @@ body[data-theme="dark"] .thumbnail-size-control .size-value {
   z-index: 1;
 }
 
+/* 拖拽选择框 */
+.selection-box {
+  position: absolute;
+  border: 2px dashed #409EFF;
+  background: rgba(64, 158, 255, 0.1);
+  pointer-events: none;
+  z-index: 1000;
+  border-radius: 4px;
+}
+
+body[data-theme="dark"] .selection-box {
+  border-color: #409EFF;
+  background: rgba(64, 158, 255, 0.15);
+}
+
 /* 中间标注画布 */
 .annotation-canvas {
   flex: 1;
@@ -4171,6 +4573,8 @@ body[data-theme="dark"] .canvas-container {
   image-rendering: -webkit-optimize-contrast;
   /* 确保canvas以原始分辨率渲染 */
   -ms-interpolation-mode: nearest-neighbor;
+  /* 十字光标样式 */
+  cursor: crosshair;
 }
 
 .empty-canvas-overlay {

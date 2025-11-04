@@ -3,6 +3,7 @@ import MainLayout from '../views/MainLayout.vue'
 import StartupLoading from '../views/StartupLoading.vue'
 import Welcome from '../views/Welcome.vue'
 import Workbench from '../views/Workbench.vue'
+import ClassificationWorkbench from '../views/ClassificationWorkbench.vue'
 import Training from '../views/Training.vue'
 import Datasets from '../views/Datasets.vue'
 import ModelHub from '../views/ModelHub.vue'
@@ -29,6 +30,11 @@ const routes = [
         path: '/workbench',
         name: 'Workbench',
         component: Workbench
+      },
+      {
+        path: '/classification',
+        name: 'ClassificationWorkbench',
+        component: ClassificationWorkbench
       },
       {
         path: '/training',

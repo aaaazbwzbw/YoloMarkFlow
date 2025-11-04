@@ -169,34 +169,33 @@ export class YoloImporter extends BaseImporter {
       // 检测数据划分（优先使用 yaml 配置）
       const splits = await this.detectSplits(datasetRoot, yamlConfig)
       
-      // 导入每个划分的数据
-      let processedImages = 0
-      
-      for (const split of splits) {
-        onProgress?.(
-          25 + (processedImages / (stats.totalImages || 1)) * 70,
-          100,
-          `处理 ${split.name} 数据...`
-        )
-
+      // 导入每个划分的数据，需要将进度映射到整个导入过程
+      const totalSplits = splits.length
+      for (let i = 0; i < splits.length; i++) {
+        const split = splits[i]
+        const splitStartPercent = (i / totalSplits) * 100
+        const splitEndPercent = ((i + 1) / totalSplits) * 100
+        
+        // 为每个 split 创建进度包装器，将 split 的进度映射到整体进度范围
+        const splitProgressWrapper = (percent, total, message) => {
+          if (onProgress) {
+            // 将 split 的进度（0-100%）映射到整体进度范围
+            const overallPercent = Math.round(splitStartPercent + (percent / 100) * (splitEndPercent - splitStartPercent))
+            onProgress(overallPercent, 100, message)
+          }
+        }
+        
         const result = await this.importSplit(
           split,
           projectName,
           categoryCache,
           copyImages,
-          (current, total) => {
-            processedImages++
-            const progress = 25 + (processedImages / total) * 70
-            onProgress?.(
-              progress,
-              100,
-              `导入图片 ${processedImages}/${total}...`
-            )
-          }
+          splitProgressWrapper
         )
 
         stats.totalImages += result.totalImages
         stats.importedImages += result.importedImages
+        stats.skippedImages += result.skippedImages
         stats.totalAnnotations += result.totalAnnotations
         stats.importedAnnotations += result.importedAnnotations
         errors.push(...result.errors)
@@ -514,10 +513,10 @@ export class YoloImporter extends BaseImporter {
   async importSplit(split, projectName, categoryCache, copyImages, onProgress) {
     const stats = {
       totalImages: 0,
-      importedImages: 0,
+      importedImages: 0,  // 实际导入到项目的图片数（在阶段3统计）
       totalAnnotations: 0,
       importedAnnotations: 0,
-      skippedImages: 0  // 添加跳过的图片统计
+      skippedImages: 0   // 跳过的图片数（比如因为某些原因没有导入的）
     }
     const errors = []
 
@@ -530,57 +529,260 @@ export class YoloImporter extends BaseImporter {
 
       stats.totalImages = validImages.length
 
-      // 导入每张图片
-      for (let i = 0; i < validImages.length; i++) {
-        const imagePath = validImages[i] // 这已经是完整路径
-        const fileName = imagePath.split(/[\\/]/).pop() // 提取文件名
+      // 准备图片导入任务数组
+      const imageTasks = validImages.map(imagePath => {
+        const fileName = imagePath.split(/[\\/]/).pop()
+        const labelFileName = split.labelDir 
+          ? fileName.replace(/\.(jpg|jpeg|png|bmp)$/i, '.txt')
+          : null
+        const labelPath = split.labelDir && labelFileName
+          ? `${split.labelDir}/${labelFileName}`
+          : null
+        
+        return {
+          imagePath,
+          fileName,
+          labelPath,
+          labelFileName
+        }
+      })
+
+      // 阶段1：并行复制所有文件（不写入数据库）
+      const { prepareImageImport } = await import('../imagePool')
+      const concurrency = 5
+      
+      // 定义各阶段的进度范围
+      const PROGRESS_STAGE1_END = 40  // 阶段1：0-40%
+      const PROGRESS_STAGE2_END = 50  // 阶段2：40-50%
+      const PROGRESS_STAGE3_END = 100 // 阶段3和4并行：50-100%
+      
+      const prepareTaskFn = async (task) => {
+        const { imagePath, fileName, labelPath, labelFileName } = task
         
         try {
-          // 导入图片到图片池
-          const imageResult = await this.importImageFile(projectName, imagePath, copyImages)
+          // 准备图片导入（仅复制文件，不写入数据库）
+          const prepared = await prepareImageImport(projectName, imagePath)
           
-          // 添加到项目数据库（使用文件名）
-          const addResult = await dbManager.addProjectImage(imageResult.imageId, fileName)
-          
-          if (addResult.isNew) {
-            stats.importedImages++
-          } else {
-            stats.skippedImages++
-            console.log(`跳过重复图片: ${fileName}`)
-          }
-
-          // 查找对应的标注文件
-          if (split.labelDir) {
-            const labelFileName = fileName.replace(/\.(jpg|jpeg|png|bmp)$/i, '.txt')
-            const labelPath = `${split.labelDir}/${labelFileName}`
-
-            if (await this.fileExists(labelPath)) {
-              try {
-                // 读取并解析标注
-                const annotations = await this.parseYoloLabel(
-                  labelPath,
-                  categoryCache
-                )
-
-                if (annotations.length > 0) {
-                  await this.saveAnnotations(imageResult.imageId, annotations)
-                  stats.totalAnnotations += annotations.length
-                  stats.importedAnnotations += annotations.length
-                }
-              } catch (error) {
-                console.warn(`解析标注文件失败 ${labelFileName}:`, error)
-              }
+          // 读取标注（如果存在）
+          let annotations = []
+          if (labelPath && await this.fileExists(labelPath)) {
+            try {
+              annotations = await this.parseYoloLabel(labelPath, categoryCache)
+            } catch (error) {
+              console.warn(`解析标注文件失败 ${labelFileName}:`, error)
             }
           }
-
-          onProgress?.(i + 1, validImages.length)
+          
+          return {
+            prepared,
+            fileName,
+            annotations
+          }
         } catch (error) {
-          errors.push({
-            image: fileName,
-            error: error.message
-          })
-          console.error(`导入图片失败 ${fileName}:`, error)
+          console.error(`准备图片导入失败 ${fileName}:`, error)
+          throw error
         }
+      }
+      
+      const prepareResult = await this.importBatch(
+        imageTasks,
+        prepareTaskFn,
+        concurrency,
+        (completed, total) => {
+          const percent = Math.round((completed / total) * PROGRESS_STAGE1_END)
+          onProgress?.(percent, 100, `复制文件 ${completed}/${total}`)
+        }
+      )
+      
+      errors.push(...prepareResult.errors)
+
+      // 阶段2：批量写入数据库
+      console.log('[YoloImporter] prepareResult:', {
+        totalResults: prepareResult.results.length,
+        successResults: prepareResult.results.filter(r => r.success).length,
+        errorResults: prepareResult.results.filter(r => !r.success).length
+      })
+      
+      const newImages = prepareResult.results
+        .filter(r => r.success && r.result && r.result.prepared && r.result.prepared.isNewFile)
+        .map(r => ({
+          hash: r.result.prepared.hash,
+          filename: r.result.prepared.filename,
+          destPath: r.result.prepared.destPath,
+          projectName
+        }))
+
+      const existingImages = prepareResult.results
+        .filter(r => r.success && r.result && r.result.prepared && !r.result.prepared.isNewFile)
+        .map(r => ({
+          imageId: r.result.prepared.existingImageId,
+          fileName: r.result.fileName,
+          annotations: r.result.annotations
+        }))
+
+      console.log('[YoloImporter] 准备批量写入数据库:', {
+        newImagesCount: newImages.length,
+        existingImagesCount: existingImages.length
+      })
+
+      // 批量插入新图片到数据库
+      let newImageResults = []
+      if (newImages.length > 0) {
+        console.log('[YoloImporter] 开始批量插入图片到数据库...')
+        onProgress?.(PROGRESS_STAGE1_END, 100, '写入数据库...')
+        const { batchInsertImages } = await import('../imagePool')
+        newImageResults = await batchInsertImages(newImages)
+        console.log('[YoloImporter] 批量插入完成:', {
+          insertedCount: newImageResults.length,
+          images: newImageResults.map(r => ({ imageId: r.imageId, filename: r.filename }))
+        })
+        // 注意：这里不统计 importedImages，因为图片只是添加到图片池，还没有添加到项目
+        // importedImages 应该在阶段3（添加项目引用）时统计
+        onProgress?.(PROGRESS_STAGE2_END, 100, `已写入 ${newImageResults.length} 张图片到数据库`)
+      } else {
+        console.log('[YoloImporter] 没有新图片需要插入数据库')
+        onProgress?.(PROGRESS_STAGE2_END, 100, '跳过数据库写入（无新图片）')
+      }
+
+      // 合并所有图片结果（新导入 + 已存在）
+      const allImageResults = []
+      const imageMap = new Map() // fileName -> { imageId, fileName, annotations }
+      
+      // 添加新导入的图片
+      for (let i = 0; i < newImageResults.length; i++) {
+        const imageResult = newImageResults[i]
+        const taskResult = prepareResult.results.find(r => 
+          r.success && r.result.prepared.hash === imageResult.hash
+        )
+        if (taskResult) {
+          allImageResults.push({
+            imageId: imageResult.imageId,
+            fileName: taskResult.result.fileName,
+            annotations: taskResult.result.annotations
+          })
+          imageMap.set(taskResult.result.fileName, {
+            imageId: imageResult.imageId,
+            fileName: taskResult.result.fileName,
+            annotations: taskResult.result.annotations
+          })
+        }
+      }
+      
+      // 添加已存在的图片
+      for (const existing of existingImages) {
+        allImageResults.push(existing)
+        imageMap.set(existing.fileName, existing)
+        // 注意：已存在的图片如果被添加到项目中，也应该计入 importedImages
+        // skippedImages 应该表示"跳过的图片"（比如因为某些原因没有导入的），而不是"已存在但成功导入的"
+        // 所以这里不增加 skippedImages，而是在后面统计实际添加到项目的图片数
+      }
+
+      console.log('[YoloImporter] 合并图片结果:', {
+        totalImages: allImageResults.length,
+        newImages: newImageResults.length,
+        existingImages: existingImages.length
+      })
+      
+      // 统计实际导入的图片数（所有成功添加到项目的图片）
+      // 注意：这里不直接使用 allImageResults.length，因为可能有些图片没有被成功添加到项目
+      // 我们会在阶段3（添加项目引用）时统计实际添加成功的图片数
+
+      // 阶段3和4：并行执行 - 批量添加项目引用和批量保存标注
+      const projectImageTasks = allImageResults.map(img => ({
+        imageId: img.imageId,
+        fileName: img.fileName
+      }))
+      
+      const annotationTasks = allImageResults
+        .filter(img => img.annotations && img.annotations.length > 0)
+        .map(img => ({
+          imageId: img.imageId,
+          annotations: img.annotations
+        }))
+      
+      const addProjectImageTaskFn = async (task) => {
+        const addResult = await dbManager.addProjectImage(task.imageId, task.fileName)
+        // 统计实际添加到项目的图片数（不管是新图片还是已存在的图片，只要成功添加到项目，就计入导入）
+        if (addResult.isNew) {
+          // 新添加到项目的图片引用
+          stats.importedImages++
+        } else {
+          // 已存在的图片引用（图片池中已有，但项目中没有，现在添加到了项目）
+          // 这种情况也应该计入导入，因为这是"导入到项目"的操作
+          stats.importedImages++
+        }
+        return { task, addResult }
+      }
+      
+      const saveAnnotationTaskFn = async (task) => {
+        try {
+          await this.saveAnnotations(task.imageId, task.annotations)
+          stats.totalAnnotations += task.annotations.length
+          stats.importedAnnotations += task.annotations.length
+        } catch (error) {
+          console.warn(`保存标注失败 imageId=${task.imageId}:`, error)
+          // 标注保存失败不影响整体导入
+        }
+      }
+      
+      // 并行执行两个任务，使用统一的进度跟踪
+      let projectImageCompleted = 0
+      let annotationCompleted = 0
+      const projectImageTotal = projectImageTasks.length
+      const annotationTotal = annotationTasks.length
+      const totalTasks = projectImageTotal + annotationTotal
+      
+      const updateProgress = () => {
+        const totalCompleted = projectImageCompleted + annotationCompleted
+        const progress = totalCompleted / totalTasks
+        const percent = Math.round(PROGRESS_STAGE2_END + progress * (PROGRESS_STAGE3_END - PROGRESS_STAGE2_END))
+        
+        // 构建进度消息
+        const messages = []
+        if (projectImageCompleted < projectImageTotal) {
+          messages.push(`添加项目引用 ${projectImageCompleted}/${projectImageTotal}`)
+        }
+        if (annotationCompleted < annotationTotal) {
+          messages.push(`保存标注 ${annotationCompleted}/${annotationTotal}`)
+        }
+        const message = messages.length > 0 ? messages.join(' | ') : '完成'
+        
+        onProgress?.(percent, 100, message)
+      }
+      
+      const [projectImageResult, annotationResult] = await Promise.all([
+        // 任务1：添加项目引用
+        this.importBatch(
+          projectImageTasks,
+          addProjectImageTaskFn,
+          concurrency,
+          (completed, total) => {
+            projectImageCompleted = completed
+            updateProgress()
+          }
+        ),
+        // 任务2：保存标注
+        annotationTasks.length > 0
+          ? this.importBatch(
+              annotationTasks,
+              saveAnnotationTaskFn,
+              concurrency,
+              (completed, total) => {
+                annotationCompleted = completed
+                updateProgress()
+              }
+            )
+          : Promise.resolve({ results: [], errors: [] })
+      ])
+      
+      errors.push(...projectImageResult.errors)
+      errors.push(...annotationResult.errors)
+      
+      // 如果两个任务都完成，显示完成消息
+      if (projectImageTasks.length > 0 || annotationTasks.length > 0) {
+        onProgress?.(PROGRESS_STAGE3_END, 100, '导入完成')
+      } else {
+        onProgress?.(PROGRESS_STAGE3_END, 100, '导入完成')
       }
     } catch (error) {
       console.error(`导入 ${split.name} 失败:`, error)

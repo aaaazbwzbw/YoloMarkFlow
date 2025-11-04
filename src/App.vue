@@ -25,7 +25,9 @@
         </div>
         <div class="title-bar-spacer"></div>
         <div v-if="isWorkbenchRoute" class="title-bar-actions">
+          <!-- 只在目标检测工作台显示工具栏按钮，分类工作台不需要 -->
           <button 
+            v-if="currentRoute === '/workbench'"
             class="title-bar-action-btn" 
             @click="toggleWorkbenchToolbar"
             title="工具栏">
@@ -90,7 +92,11 @@ export default {
   },
   computed: {
     isWorkbenchRoute() {
-      return this.$route.path === '/workbench'
+      // 目标检测工作台或分类工作台都显示工具栏按钮
+      return this.$route.path === '/workbench' || this.$route.path === '/classification'
+    },
+    currentRoute() {
+      return this.$route.path
     },
     isStartupRoute() {
       return this.$route.path === '/startup'
@@ -165,15 +171,37 @@ export default {
           return
         }
         
-        const project = configResult.config
+        let project = configResult.config
         
-        // 如果当前不在工作台，跳转到工作台
-        if (this.$route.path !== '/workbench') {
-          console.log('自动恢复项目:', project.name)
+        // 修复可能损坏的配置
+        const { fixCorruptedConfig, needsFix } = await import('./utils/projectManager')
+        if (needsFix(project)) {
+          project = fixCorruptedConfig(project)
+        }
+        
+        // 确保项目类型存在（兼容旧项目，默认为 'detection'）
+        if (!project.type) {
+          console.warn('项目配置缺少 type 字段，默认为 detection:', project)
+          project.type = 'detection'
+        }
+        
+        // 根据项目类型决定跳转到哪个工作台
+        const workbenchPath = project.type === 'classification' ? '/classification' : '/workbench'
+        
+        // 如果当前路由已经是正确的工作台，不需要跳转
+        // 但如果当前路由是错误的工作台（比如分类项目但当前在目标检测工作台），需要强制跳转
+        const currentPath = this.$route.path
+        const isCorrectWorkbench = (currentPath === '/workbench' && project.type !== 'classification') || 
+                                  (currentPath === '/classification' && project.type === 'classification')
+        
+        if (!isCorrectWorkbench) {
+          console.log('自动恢复项目:', project.name, '类型:', project.type, '跳转到:', workbenchPath)
           this.$router.push({
-            path: '/workbench',
+            path: workbenchPath,
             query: { projectPath: lastProjectPath }
           })
+        } else {
+          console.log('当前已在正确的工作台，无需跳转')
         }
       } catch (error) {
         console.error('恢复上次打开的项目失败:', error)
@@ -196,11 +224,11 @@ export default {
       }
     },
     toggleWorkbenchToolbar() {
-      // 发送自定义事件给Workbench组件
+      // 发送自定义事件给工作台组件（Workbench 或 ClassificationWorkbench）
       window.dispatchEvent(new Event('toggle-workbench-toolbar'))
     },
     openShortcutsModal() {
-      // 发送自定义事件给Workbench组件
+      // 发送自定义事件给工作台组件（Workbench 或 ClassificationWorkbench）
       window.dispatchEvent(new Event('open-shortcuts-modal'))
     },
     handleProjectChanged(project) {

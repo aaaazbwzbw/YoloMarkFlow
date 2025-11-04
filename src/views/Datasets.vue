@@ -136,6 +136,10 @@
             </div>
 
             <div class="dataset-actions">
+              <el-button size="small" type="success" @click="restoreDataset(dataset)">
+                <el-icon><Upload /></el-icon>
+                回溯
+              </el-button>
               <el-button size="small" @click="updateDataset(dataset)">
                 <el-icon><RefreshRight /></el-icon>
                 更新
@@ -165,7 +169,7 @@
       size="medium"
       :footer-buttons="[
         { label: '取消', onClick: () => createDialogVisible = false },
-        { label: '确定创建', type: 'primary', onClick: confirmCreateDataset, loading: creating, disabled: createProgressVisible }
+        { label: '确定创建', type: 'primary', onClick: confirmCreateDataset, loading: creating, disabled: creating }
       ]"
     >
       <el-form :model="createForm" label-width="100px">
@@ -441,87 +445,7 @@
       </div>
     </Modal>
     
-    <!-- 删除进度对话框 -->
-    <Modal 
-      v-model="deleteProgressVisible" 
-      title="正在删除"
-      :show-footer="false"
-      :show-close="false"
-      :close-on-overlay="false">
-      <div class="delete-progress-content">
-        <el-progress 
-          :percentage="deleteProgress.percent" 
-          :status="deleteProgress.status"
-          :stroke-width="20">
-        </el-progress>
-        <p class="progress-message">{{ deleteProgress.message }}</p>
-        
-        <div v-if="deleteProgress.status === 'success'" class="delete-result">
-          <div class="result-stats">
-            <p v-if="deleteProgress.stats.deletedCount > 0" class="stat-item success">
-              ✓ 已删除 {{ deleteProgress.stats.deletedCount }} 张图片
-            </p>
-            <p v-if="deleteProgress.stats.skippedCount > 0" class="stat-item info">
-              ⚠ 跳过 {{ deleteProgress.stats.skippedCount }} 张（不存在于图片池）
-            </p>
-            <p v-if="deleteProgress.stats.errorCount > 0" class="stat-item error">
-              ✗ {{ deleteProgress.stats.errorCount }} 张删除失败
-            </p>
-          </div>
-          <div class="result-actions">
-            <el-button type="primary" @click="closeDeleteProgress">确定</el-button>
-          </div>
-        </div>
-        
-        <div v-if="deleteProgress.status === 'exception'" class="delete-result">
-          <p class="error-message">{{ deleteProgress.error }}</p>
-          <div class="result-actions">
-            <el-button @click="closeDeleteProgress">确定</el-button>
-          </div>
-        </div>
-      </div>
-    </Modal>
-    
-    <!-- 创建进度对话框 -->
-    <Modal 
-      v-model="createProgressVisible" 
-      title="正在创建数据集"
-      :show-footer="false"
-      :show-close="false"
-      :close-on-overlay="false">
-      <div class="create-progress-content">
-        <el-progress 
-          :percentage="createProgress.percent" 
-          :status="createProgress.status"
-          :stroke-width="20">
-        </el-progress>
-        <p class="progress-message">{{ createProgress.message }}</p>
-        
-        <div v-if="createProgress.status === 'success'" class="create-result">
-          <div class="result-stats">
-            <p v-if="createProgress.stats.totalImages > 0" class="stat-item success">
-              ✓ 成功创建数据集，包含 {{ createProgress.stats.totalImages }} 张图片
-            </p>
-            <p v-if="createProgress.stats.totalAnnotations > 0" class="stat-item info">
-              ✓ 共 {{ createProgress.stats.totalAnnotations }} 个标注
-            </p>
-            <p v-if="Object.keys(createProgress.stats.categoryCounts || {}).length > 0" class="stat-item info">
-              ✓ {{ Object.keys(createProgress.stats.categoryCounts || {}).length }} 个类别
-            </p>
-          </div>
-          <div class="result-actions">
-            <el-button type="primary" @click="closeCreateProgress">确定</el-button>
-          </div>
-        </div>
-        
-        <div v-if="createProgress.status === 'exception'" class="create-result">
-          <p class="error-message">{{ createProgress.error }}</p>
-          <div class="result-actions">
-            <el-button @click="closeCreateProgress">确定</el-button>
-          </div>
-        </div>
-      </div>
-    </Modal>
+
   </div>
 </template>
 
@@ -529,11 +453,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { 
   Plus, PictureFilled, PriceTag, ArrowRight, ArrowDown,
-  Refresh, RefreshRight, Download, Delete, Folder, Close, Document, View, WarningFilled
+  Refresh, RefreshRight, Download, Delete, Folder, Close, Document, View, WarningFilled, Upload
 } from '@element-plus/icons-vue'
-import { listProjects } from '../utils/projectManager'
+import { listProjects, getCurrentProject } from '../utils/projectManager'
 import { getProjectStats } from '../utils/projectStats'
-import { listDatasets, createDataset, updateDataset as updateDatasetUtil, switchDatasetVersion, deleteDataset as deleteDatasetUtil, deleteDatasetVersion } from '../utils/datasetManager'
+import { listDatasets, createDataset, updateDataset as updateDatasetUtil, switchDatasetVersion, deleteDataset as deleteDatasetUtil, deleteDatasetVersion, restoreDatasetToProject } from '../utils/datasetManager'
 import { YoloExporter } from '../utils/exporters/YoloExporter'
 import { CocoExporter } from '../utils/exporters/CocoExporter'
 
@@ -541,7 +465,8 @@ import { CocoExporter } from '../utils/exporters/CocoExporter'
 import Modal from '../components/Modal.vue'
 import { confirm } from '../utils/dialog'
 import { success, error, warning, info } from '../utils/toast'
-import { showLoading, hideLoading } from '../utils/loading'
+import { showLoading } from '../utils/loading'
+import { ElMessageBox } from 'element-plus'
 
 export default {
   name: 'Datasets',
@@ -592,65 +517,7 @@ export default {
     const deleteDialogVisible = ref(false)
     const deletingDataset = ref(null)
     
-    // 删除进度对话框
-    const deleteProgressVisible = ref(false)
-    const deleteProgress = ref({
-      percent: 0,
-      message: '正在删除...',
-      status: '', // '', 'success', 'exception'
-      error: '',
-      stats: {
-        deletedCount: 0,
-        skippedCount: 0,
-        errorCount: 0
-      }
-    })
     
-    const closeDeleteProgress = () => {
-      deleteProgressVisible.value = false
-      // 重置进度状态
-      deleteProgress.value = {
-        percent: 0,
-        message: '正在删除...',
-        status: '',
-        error: '',
-        stats: {
-          deletedCount: 0,
-          skippedCount: 0,
-          errorCount: 0
-        }
-      }
-    }
-    
-    // 创建进度对话框
-    const createProgressVisible = ref(false)
-    const createProgress = ref({
-      percent: 0,
-      message: '正在创建数据集...',
-      status: '', // '', 'success', 'exception'
-      error: '',
-      stats: {
-        totalImages: 0,
-        totalAnnotations: 0,
-        categoryCounts: {}
-      }
-    })
-    
-    const closeCreateProgress = () => {
-      createProgressVisible.value = false
-      // 重置进度状态
-      createProgress.value = {
-        percent: 0,
-        message: '正在创建数据集...',
-        status: '',
-        error: '',
-        stats: {
-          totalImages: 0,
-          totalAnnotations: 0,
-          categoryCounts: {}
-        }
-      }
-    }
 
 
     // 计算选中的项目和类别数量
@@ -876,20 +743,9 @@ export default {
       try {
         creating.value = true
         
-        // 隐藏创建对话框，显示进度对话框
+        // 隐藏创建对话框，显示进度遮罩层
         createDialogVisible.value = false
-        createProgressVisible.value = true
-        createProgress.value = {
-          percent: 0,
-          message: '正在创建数据集...',
-          status: '',
-          error: '',
-          stats: {
-            totalImages: 0,
-            totalAnnotations: 0,
-            categoryCounts: {}
-          }
-        }
+        let closeLoading = showLoading('正在创建数据集...')
 
         // 构建项目选择数据
         const projectSelections = selectedProjects.value.map(proj => ({
@@ -897,36 +753,71 @@ export default {
           categoryIds: proj.selectedCategories.map(c => c.id)
         }))
 
-        const result = await createDataset(createForm.value.name, projectSelections, {
-          onProgress: (current, total, message) => {
-            // 更新进度
-            if (total > 0) {
-              const percent = Math.round((current / total) * 100)
-              createProgress.value.percent = percent
-              createProgress.value.message = message || `正在创建数据集 ${current}/${total}...`
-            } else {
-              createProgress.value.message = message || '正在创建数据集...'
-            }
-          }
-        })
-
-        // 更新创建结果
-        createProgress.value.percent = 100
-        createProgress.value.status = 'success'
-        createProgress.value.message = '创建完成'
-        createProgress.value.stats = result.stats || {
+        let createStats = {
           totalImages: 0,
           totalAnnotations: 0,
           categoryCounts: {}
         }
-        
-        // 刷新数据集列表
-        await loadDatasets()
-      } catch (err) {
-        console.error('创建数据集失败:', err)
-        createProgress.value.status = 'exception'
-        createProgress.value.error = err.message || '创建数据集失败'
-        createProgress.value.message = '创建失败'
+
+        try {
+          const result = await createDataset(createForm.value.name, projectSelections, {
+            onProgress: (current, total, message) => {
+              // 更新进度消息
+              const progressMessage = message || (total > 0 ? `正在创建数据集 ${current}/${total}...` : '正在创建数据集...')
+              closeLoading(progressMessage)
+            }
+          })
+
+          createStats = result.stats || {
+            totalImages: 0,
+            totalAnnotations: 0,
+            categoryCounts: {}
+          }
+          
+          // 关闭遮罩层
+          closeLoading()
+          closeLoading = null
+          
+          // 显示创建结果对话框
+          const resultMessage = `<div style="line-height: 1.8;">
+            <p style="margin-bottom: 12px;">数据集创建成功！</p>
+            <div style="margin-top: 16px;">
+              <p><strong>统计信息：</strong></p>
+              <ul style="margin: 8px 0 0 20px; padding: 0;">
+                ${createStats.totalImages > 0 ? `<li>包含图片：${createStats.totalImages} 张</li>` : ''}
+                ${createStats.totalAnnotations > 0 ? `<li>共标注：${createStats.totalAnnotations} 个</li>` : ''}
+                ${Object.keys(createStats.categoryCounts || {}).length > 0 ? `<li>类别数量：${Object.keys(createStats.categoryCounts || {}).length} 个</li>` : ''}
+              </ul>
+            </div>
+          </div>`
+          
+          await ElMessageBox({
+            title: '创建成功',
+            message: resultMessage,
+            dangerouslyUseHTMLString: true,
+            confirmButtonText: '确定',
+            type: 'success'
+          })
+          
+          // 刷新数据集列表
+          await loadDatasets()
+        } catch (err) {
+          // 关闭遮罩层
+          if (closeLoading) {
+            closeLoading()
+            closeLoading = null
+          }
+          
+          console.error('创建数据集失败:', err)
+          
+          // 显示错误对话框
+          await ElMessageBox({
+            title: '创建失败',
+            message: `创建数据集失败：${err.message || '未知错误'}`,
+            confirmButtonText: '确定',
+            type: 'error'
+          })
+        }
       } finally {
         creating.value = false
       }
@@ -1220,57 +1111,72 @@ export default {
           })
           
           // 删除数据集并显示进度
-          // 显示删除进度对话框
-          deleteProgressVisible.value = true
-          deleteProgress.value = {
-            percent: 0,
-            message: '正在删除数据集...',
-            status: '',
-            error: '',
-            stats: {
+          let closeLoading = showLoading('正在删除数据集...')
+          
+          try {
+            let deleteStats = {
               deletedCount: 0,
               skippedCount: 0,
               errorCount: 0
             }
-          }
-          
-          try {
+            
             const result = await deleteDatasetUtil(dataset.name, {
               deleteOrphanedImages: true,
               onProgress: (current, total, message) => {
-                // 更新进度
-                if (total > 0) {
-                  const percent = Math.round((current / total) * 100)
-                  deleteProgress.value.percent = percent
-                  deleteProgress.value.message = message || `正在删除图片 ${current}/${total}...`
-                } else {
-                  deleteProgress.value.message = message || '正在删除...'
-                }
+                // 更新进度消息
+                const progressMessage = message || (total > 0 ? `正在删除图片 ${current}/${total}...` : '正在删除...')
+                closeLoading(progressMessage)
               }
             })
             
-            // 更新删除结果
-            deleteProgress.value.percent = 100
-            deleteProgress.value.status = 'success'
-            deleteProgress.value.message = '删除完成'
-            deleteProgress.value.stats = {
+            deleteStats = {
               deletedCount: result.deletedImageCount || 0,
-              skippedCount: 0, // 数据集删除时没有跳过统计
+              skippedCount: 0,
               errorCount: 0
             }
             
-            // 如果有删除的图片，显示成功提示
-            if (result.deletedImageCount > 0) {
-              success(`数据集已删除，已删除 ${result.deletedImageCount} 张未被引用的图片`)
-            } else {
-              success('删除成功')
+            // 关闭遮罩层
+            closeLoading()
+            closeLoading = null
+            
+            // 显示删除结果对话框
+            let resultMessage = `<div style="line-height: 1.8;">
+              <p style="margin-bottom: 12px;">数据集 "${dataset.name}" 已删除</p>`
+            
+            if (deleteStats.deletedCount > 0) {
+              resultMessage += `<div style="margin-top: 16px;">
+                <p><strong>统计信息：</strong></p>
+                <ul style="margin: 8px 0 0 20px; padding: 0;">
+                  <li>已删除图片：${deleteStats.deletedCount} 张</li>
+                </ul>
+              </div>`
             }
+            
+            resultMessage += `</div>`
+            
+            await ElMessageBox({
+              title: '删除成功',
+              message: resultMessage,
+              dangerouslyUseHTMLString: true,
+              confirmButtonText: '确定',
+              type: 'success'
+            })
             
             await loadDatasets()
           } catch (error) {
-            deleteProgress.value.status = 'exception'
-            deleteProgress.value.error = error.message || '删除数据集失败'
-            deleteProgress.value.message = '删除失败'
+            // 关闭遮罩层
+            if (closeLoading) {
+              closeLoading()
+              closeLoading = null
+            }
+            
+            // 显示错误对话框
+            await ElMessageBox({
+              title: '删除失败',
+              message: `删除数据集失败：${error.message || '未知错误'}`,
+              confirmButtonText: '确定',
+              type: 'error'
+            })
           }
         } catch (err) {
           if (err !== 'close' && err !== 'cancel' && err !== false) {
@@ -1291,57 +1197,72 @@ export default {
 
         if (deleteAll) {
           // 删除整个数据集（所有版本）
-          // 显示删除进度对话框
-          deleteProgressVisible.value = true
-          deleteProgress.value = {
-            percent: 0,
-            message: '正在删除数据集...',
-            status: '',
-            error: '',
-            stats: {
+          let closeLoading = showLoading('正在删除数据集...')
+          
+          try {
+            let deleteStats = {
               deletedCount: 0,
               skippedCount: 0,
               errorCount: 0
             }
-          }
-          
-          try {
+            
             const result = await deleteDatasetUtil(dataset.name, {
               deleteOrphanedImages: true,
               onProgress: (current, total, message) => {
-                // 更新进度
-                if (total > 0) {
-                  const percent = Math.round((current / total) * 100)
-                  deleteProgress.value.percent = percent
-                  deleteProgress.value.message = message || `正在删除图片 ${current}/${total}...`
-                } else {
-                  deleteProgress.value.message = message || '正在删除...'
-                }
+                // 更新进度消息
+                const progressMessage = message || (total > 0 ? `正在删除图片 ${current}/${total}...` : '正在删除...')
+                closeLoading(progressMessage)
               }
             })
             
-            // 更新删除结果
-            deleteProgress.value.percent = 100
-            deleteProgress.value.status = 'success'
-            deleteProgress.value.message = '删除完成'
-            deleteProgress.value.stats = {
+            deleteStats = {
               deletedCount: result.deletedImageCount || 0,
               skippedCount: 0,
               errorCount: 0
             }
             
-            // 如果有删除的图片，显示成功提示
-            if (result.deletedImageCount > 0) {
-              success(`已删除所有版本，已删除 ${result.deletedImageCount} 张未被引用的图片`)
-            } else {
-              success('已删除所有版本')
+            // 关闭遮罩层
+            closeLoading()
+            closeLoading = null
+            
+            // 显示删除结果对话框
+            let resultMessage = `<div style="line-height: 1.8;">
+              <p style="margin-bottom: 12px;">数据集 "${dataset.name}" 的所有版本已删除</p>`
+            
+            if (deleteStats.deletedCount > 0) {
+              resultMessage += `<div style="margin-top: 16px;">
+                <p><strong>统计信息：</strong></p>
+                <ul style="margin: 8px 0 0 20px; padding: 0;">
+                  <li>已删除图片：${deleteStats.deletedCount} 张</li>
+                </ul>
+              </div>`
             }
+            
+            resultMessage += `</div>`
+            
+            await ElMessageBox({
+              title: '删除成功',
+              message: resultMessage,
+              dangerouslyUseHTMLString: true,
+              confirmButtonText: '确定',
+              type: 'success'
+            })
             
             await loadDatasets()
           } catch (error) {
-            deleteProgress.value.status = 'exception'
-            deleteProgress.value.error = error.message || '删除数据集失败'
-            deleteProgress.value.message = '删除失败'
+            // 关闭遮罩层
+            if (closeLoading) {
+              closeLoading()
+              closeLoading = null
+            }
+            
+            // 显示错误对话框
+            await ElMessageBox({
+              title: '删除失败',
+              message: `删除数据集失败：${error.message || '未知错误'}`,
+              confirmButtonText: '确定',
+              type: 'error'
+            })
           }
         } else {
           // 仅删除当前版本
@@ -1359,6 +1280,94 @@ export default {
       }
     }
 
+    // 回溯数据集到当前项目
+    const restoreDataset = async (dataset) => {
+      try {
+        // 检查是否有当前项目
+        const currentProject = getCurrentProject()
+        if (!currentProject || !currentProject.path) {
+          warning('请先打开一个项目')
+          return
+        }
+        
+        // 确认对话框
+        await confirm({
+          title: '确认回溯',
+          message: `确定要将数据集 "${dataset.name}" 回溯到当前项目 "${currentProject.name}" 吗？\n\n这将把数据集的所有图片和标注添加到当前项目中。`,
+          confirmText: '确认回溯',
+          cancelText: '取消'
+        })
+        
+        // 显示回溯进度遮罩层
+        let closeLoading = showLoading('正在回溯数据集...')
+        
+        try {
+          // 执行回溯
+          const result = await restoreDatasetToProject(
+            dataset.name,
+            currentProject.path,
+            {
+              onProgress: (current, total, message) => {
+                // 更新进度消息
+                const progressMessage = message || `正在回溯数据集... (${Math.round((current / total) * 100)}%)`
+                closeLoading(progressMessage)
+              }
+            }
+          )
+          
+          // 关闭遮罩层
+          closeLoading()
+          closeLoading = null
+          
+          // 显示回溯结果对话框
+          const resultMessage = `<div style="line-height: 1.8;">
+            <p style="margin-bottom: 12px;">数据集回溯成功！</p>
+            <div style="margin-top: 16px;">
+              <p><strong>统计信息：</strong></p>
+              <ul style="margin: 8px 0 0 20px; padding: 0;">
+                ${result.stats.addedImages > 0 ? `<li>新增图片：${result.stats.addedImages} 张</li>` : ''}
+                ${result.stats.skippedImages > 0 ? `<li>跳过图片：${result.stats.skippedImages} 张（已存在）</li>` : ''}
+                ${result.stats.addedAnnotations > 0 ? `<li>添加标注：${result.stats.addedAnnotations} 个</li>` : ''}
+              </ul>
+            </div>
+          </div>`
+          
+          await ElMessageBox({
+            title: '回溯成功',
+            message: resultMessage,
+            dangerouslyUseHTMLString: true,
+            confirmButtonText: '确定',
+            type: 'success'
+          })
+          
+          // 刷新数据集列表（如果需要）
+          await loadDatasets()
+        } catch (err) {
+          // 关闭遮罩层
+          if (closeLoading) {
+            closeLoading()
+            closeLoading = null
+          }
+          
+          console.error('回溯数据集失败:', err)
+          
+          // 显示错误对话框
+          await ElMessageBox({
+            title: '回溯失败',
+            message: `回溯数据集失败：${err.message || '未知错误'}`,
+            confirmButtonText: '确定',
+            type: 'error'
+          })
+        }
+      } catch (err) {
+        // 处理确认对话框取消等情况
+        if (err !== 'close' && err !== 'cancel' && err !== false) {
+          console.error('回溯数据集失败:', err)
+          error('回溯数据集失败: ' + (err.message || err))
+        }
+      }
+    }
+    
     // 格式化日期
     const formatDate = (dateStr) => {
       if (!dateStr) return '-'
@@ -1424,18 +1433,13 @@ export default {
       switchVersion,
       updateDataset,
       exportDataset,
+      restoreDataset,
       deleteDataset,
       confirmDelete,
       formatDate,
       // 删除相关
       deleteDialogVisible,
       deletingDataset,
-      deleteProgressVisible,
-      deleteProgress,
-      closeDeleteProgress,
-      createProgressVisible,
-      createProgress,
-      closeCreateProgress,
       // Icons
       Plus,
       PictureFilled,
@@ -1448,6 +1452,7 @@ export default {
       Download,
       Delete,
       Folder,
+      Upload,
       Close,
       Document,
       WarningFilled
@@ -1457,65 +1462,7 @@ export default {
 </script>
 
 <style scoped>
-/* 删除进度对话框样式 */
-.delete-progress-content {
-  padding: 20px;
-  text-align: center;
-}
 
-.progress-message {
-  margin-top: 16px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-}
-
-.delete-result {
-  margin-top: 24px;
-}
-
-.result-stats {
-  text-align: left;
-  margin-bottom: 20px;
-}
-
-.stat-item {
-  padding: 8px 0;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.stat-item.success {
-  color: var(--color-success);
-}
-
-.stat-item.info {
-  color: var(--color-warning);
-}
-
-.stat-item.error {
-  color: var(--color-danger);
-}
-
-.error-message {
-  color: var(--color-danger);
-  margin-bottom: 20px;
-}
-
-.result-actions {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-}
-
-/* 创建进度对话框样式 */
-.create-progress-content {
-  padding: 20px;
-  text-align: center;
-}
-
-.create-result {
-  margin-top: 24px;
-}
 
 /* 整体页面布局 */
 .datasets-page {

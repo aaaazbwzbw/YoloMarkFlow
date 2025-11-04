@@ -11,10 +11,14 @@ export const currentProject = ref(null)
  * 创建项目配置
  */
 export function createProjectConfig(projectInfo) {
+  // 确保 type 字段存在，默认为 'detection'
+  const projectType = projectInfo.type || 'detection'
+  
   return {
     name: projectInfo.name,
     path: projectInfo.path,
     description: projectInfo.description || '',
+    type: projectType, // 项目类型：'detection' (YOLO目标检测) 或 'classification' (分类标注)，默认为 'detection'
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     version: '1.0.1',
@@ -79,6 +83,11 @@ export function fixCorruptedConfig(config) {
   else if (config.name && config.path && config.version) {
     console.log('fixCorruptedConfig: 检测到正常的项目配置，无需修复')
     result = config
+    // 确保 type 字段存在（兼容旧项目）
+    if (!result.type) {
+      console.warn('fixCorruptedConfig: 项目配置缺少 type 字段，默认为 detection')
+      result.type = 'detection'
+    }
   }
   // 如果配置看起来不完整，尝试修复
   else if (config.config && typeof config.config === 'object') {

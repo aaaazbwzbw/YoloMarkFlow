@@ -191,5 +191,79 @@ export class BaseImporter {
   async validateDataset(datasetPath) {
     throw new Error('子类必须实现 validateDataset 方法')
   }
+
+  /**
+   * 并发控制工具：限制并发数量
+   * @param {Number} limit - 最大并发数
+   * @returns {Function} - 返回一个函数，用于包装需要并发控制的异步函数
+   */
+  createConcurrencyLimiter(limit = 5) {
+    let running = 0
+    const queue = []
+
+    const execute = async (fn) => {
+      if (running >= limit) {
+        // 如果达到并发限制，等待
+        await new Promise(resolve => queue.push(resolve))
+      }
+
+      running++
+      try {
+        return await fn()
+      } finally {
+        running--
+        // 执行队列中的下一个任务
+        if (queue.length > 0) {
+          const next = queue.shift()
+          next()
+        }
+      }
+    }
+
+    return execute
+  }
+
+  /**
+   * 批量导入图片（并行处理）
+   * @param {Array} imageTasks - 图片导入任务数组 [{ imagePath, fileName, ... }]
+   * @param {Function} importTaskFn - 单个图片导入任务函数 (task) => Promise<result>
+   * @param {Number} concurrency - 并发数，默认 5
+   * @param {Function} onProgress - 进度回调 (completed, total) => void
+   * @returns {Promise<Object>} - { results, errors }
+   */
+  async importBatch(imageTasks, importTaskFn, concurrency = 5, onProgress) {
+    const limiter = this.createConcurrencyLimiter(concurrency)
+    const results = []
+    const errors = []
+    let completed = 0
+
+    // 创建所有任务
+    const tasks = imageTasks.map((task, index) => 
+      limiter(async () => {
+        try {
+          const result = await importTaskFn(task)
+          results.push({ success: true, index, result })
+          completed++
+          onProgress?.(completed, imageTasks.length)
+          return { success: true, index, result }
+        } catch (error) {
+          const errorInfo = {
+            image: task.fileName || task.imagePath || task.cocoImage?.file_name || 'unknown',
+            error: error.message
+          }
+          errors.push(errorInfo)
+          results.push({ success: false, index, error: errorInfo })
+          completed++
+          onProgress?.(completed, imageTasks.length)
+          return { success: false, index, error: errorInfo }
+        }
+      })
+    )
+
+    // 等待所有任务完成
+    await Promise.all(tasks)
+
+    return { results, errors }
+  }
 }
 

@@ -33,8 +33,8 @@
       <!-- 主菜单 -->
       <nav class="main-menu">
         <div class="menu-item" 
-             :class="{ active: currentRoute === '/workbench', disabled: !hasProject }"
-             @click="hasProject ? navigateTo('/workbench') : showProjectRequiredMessage()"
+             :class="{ active: currentRoute === '/workbench' || currentRoute === '/classification', disabled: !hasProject }"
+             @click="hasProject ? navigateToWorkbench() : showProjectRequiredMessage()"
              :title="isCollapsed ? '标注工作台' : ''">
           <el-icon><Edit /></el-icon>
           <div class="menu-text">
@@ -156,6 +156,15 @@ export default {
     },
     navigateTo(path) {
       this.$router.push(path)
+    },
+    navigateToWorkbench() {
+      // 根据项目类型跳转到对应工作台
+      const project = getCurrentProject()
+      if (project && project.type === 'classification') {
+        this.$router.push('/classification')
+      } else {
+        this.$router.push('/workbench')
+      }
     },
     showProjectRequiredMessage() {
       this.$message.warning('请先打开或创建一个项目')

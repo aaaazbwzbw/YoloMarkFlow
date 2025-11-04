@@ -8,7 +8,7 @@
 
 提供完整的 YOLO 模型训练功能。
 
-**下载地址**: https://yolomarkflow.com/plugins/training
+**下载地址**: https://github.com/aaaazbwzbw/YoloMarkFlow/releases/download/v1.0.0/yolo-training-inference.rar
 
 **安装方法**:
 ```bash
@@ -32,8 +32,8 @@ unzip training-plugin.zip
 ## 插件开发
 
 想开发自己的插件？查看：
-- [插件开发指南](../docs/PLUGIN_API.md)
-- [示例插件](https://github.com/YOUR_USERNAME/YoloMarkFlow-Plugin-Example)
+- [插件 API 文档](./PLUGIN_API.md) - 完整的 API 参考文档
+- [示例插件](https://github.com/aaaazbwzbw/YoloMarkFlow/releases/download/v1.0.0/yolo-training-inference.rar) - 官方训练插件示例
 
 ### 插件结构
 
@@ -63,7 +63,5 @@ plugins/
 }
 ```
 
----
 
-**更多信息**: https://github.com/YOUR_USERNAME/YoloMarkFlow
 

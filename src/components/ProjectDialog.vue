@@ -34,6 +34,13 @@
     width="500px"
     :close-on-click-modal="false">
     <el-form :model="newProjectForm" :rules="newProjectRules" ref="newProjectFormRef" label-width="80px">
+      <el-form-item label="项目类型" prop="type">
+        <el-radio-group v-model="newProjectForm.type">
+          <el-radio label="detection">YOLO 目标检测</el-radio>
+          <el-radio label="classification">分类标注</el-radio>
+        </el-radio-group>
+      </el-form-item>
+      
       <el-form-item label="项目名称" prop="name">
         <el-input 
           v-model="newProjectForm.name" 
@@ -331,6 +338,7 @@ export default {
     const selectedBasePath = ref('')
     
     const newProjectForm = reactive({
+      type: 'detection', // 项目类型：'detection' (YOLO目标检测) 或 'classification' (分类标注)
       name: '',
       path: '',
       description: ''
@@ -353,6 +361,7 @@ export default {
     const showNewProjectDialog = () => {
       newProjectDialogVisible.value = true
       // 重置表单
+      newProjectForm.type = 'detection' // 默认选择 YOLO 目标检测
       newProjectForm.name = ''
       newProjectForm.path = ''
       newProjectForm.description = ''
@@ -450,7 +459,8 @@ export default {
           const config = createProjectConfig({
             name: newProjectForm.name,
             path: newProjectForm.path,
-            description: newProjectForm.description
+            description: newProjectForm.description,
+            type: newProjectForm.type // 项目类型
           })
 
           // 写入配置文件
@@ -476,9 +486,10 @@ export default {
           // 触发事件
           emit('project-created', config)
           
-          // 自动跳转到工作台
+          // 根据项目类型跳转到对应工作台
+          const workbenchPath = config.type === 'classification' ? '#/classification' : '#/workbench'
           setTimeout(() => {
-            window.location.hash = '#/workbench'
+            window.location.hash = workbenchPath
           }, 100)
         } catch (error) {
           console.error('创建项目失败', error)
@@ -557,9 +568,18 @@ export default {
         const currentProject = getCurrentProject()
         const isProjectSwitch = currentProject && currentProject.path !== projectPath
         
+        // 检查是否需要切换工作台（项目类型不同）
+        const currentProjectType = currentProject?.type || 'detection'
+        const newProjectType = config.type || 'detection'
+        const needSwitchWorkbench = isProjectSwitch && currentProjectType !== newProjectType
+        
         if (isProjectSwitch) {
           // 项目切换：先保存当前状态，再切换
-          console.log('切换项目：先保存当前项目状态...')
+          console.log('切换项目：先保存当前项目状态...', {
+            currentProjectType,
+            newProjectType,
+            needSwitchWorkbench
+          })
           
           // 设置为当前项目
           setCurrentProject(config)
@@ -568,13 +588,41 @@ export default {
           toast.success('正在切换项目...')
           openProjectDialogVisible.value = false
           
-          // 触发项目切换事件（带保存逻辑）
-          window.dispatchEvent(new CustomEvent('project-switch-requested', { 
-            detail: { 
-              newProject: config,
-              needSave: true 
-            } 
-          }))
+          // 如果需要切换工作台类型，先跳转到对应工作台，然后触发切换事件
+          if (needSwitchWorkbench) {
+            // 根据新项目类型跳转到对应工作台
+            const workbenchPath = newProjectType === 'classification' ? '#/classification' : '#/workbench'
+            console.log('项目类型不同，先跳转到对应工作台:', workbenchPath)
+            
+            // 先设置全局标志，表示这是项目切换触发的路由跳转
+            // 这样新工作台的 onMounted 可以检测到这个标志，避免显示重复提示
+            window.__isProjectSwitching = true
+            
+            // 先跳转路由
+            window.location.hash = workbenchPath
+            
+            // 等待路由切换完成后再触发切换事件
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('project-switch-requested', { 
+                detail: { 
+                  newProject: config,
+                  needSave: true 
+                } 
+              }))
+              // 清除标志
+              setTimeout(() => {
+                window.__isProjectSwitching = false
+              }, 500)
+            }, 300)
+          } else {
+            // 项目类型相同，直接触发切换事件
+            window.dispatchEvent(new CustomEvent('project-switch-requested', { 
+              detail: { 
+                newProject: config,
+                needSave: true 
+              } 
+            }))
+          }
         } else {
           // 首次打开项目：直接打开
           setCurrentProject(config)
@@ -585,9 +633,10 @@ export default {
           
           emit('project-opened', config)
           
-          // 跳转到工作台
+          // 根据项目类型跳转到对应工作台
+          const workbenchPath = config.type === 'classification' ? '#/classification' : '#/workbench'
           setTimeout(() => {
-            window.location.hash = '#/workbench'
+            window.location.hash = workbenchPath
           }, 100)
         }
       } catch (error) {
@@ -814,12 +863,6 @@ export default {
 
     // 开始导入
     const startImport = async () => {
-      importing.value = true
-      importStep.value = 3
-      importProgress.status = ''
-      importProgress.percent = 0
-      importProgress.message = '准备导入...'
-
       try {
         let projectPath = importConfig.projectPath
         let projectName = importConfig.projectName
@@ -839,10 +882,12 @@ export default {
           }
 
           // 创建项目配置
+          // 导入数据集时创建的项目默认为目标检测类型（YOLO和COCO都是目标检测格式）
           const config = createProjectConfig({
             name: projectName,
             path: projectPath,
-            description: `从${importConfig.type.toUpperCase()}数据集导入`
+            description: `从${importConfig.type.toUpperCase()}数据集导入`,
+            type: 'detection' // 导入数据集时默认为目标检测类型
           })
 
           // 写入配置文件
@@ -868,48 +913,139 @@ export default {
           projectName = currentProject.name
         }
 
-        // 创建导入器
-        const importer = importConfig.type === 'coco' 
-          ? new CocoImporter() 
-          : new YoloImporter()
+        // 关闭导入对话框
+        importDialogVisible.value = false
 
-        // 执行导入
-        const result = await importer.import({
-          configFilePath: importConfig.configFilePath,
-          datasetPath: importConfig.datasetPath, // 向后兼容
-          projectPath: projectPath,
-          projectName: projectName,
-          copyImages: importConfig.copyImages,
-          onProgress: (percent, total, message) => {
-            importProgress.percent = Math.round(percent)
-            importProgress.message = message
+        // 显示加载遮罩层
+        const { showLoading, hideLoading } = await import('../utils/loading')
+        let closeLoading = showLoading('准备导入数据集...')
+
+        try {
+          // 创建导入器
+          const importer = importConfig.type === 'coco' 
+            ? new CocoImporter() 
+            : new YoloImporter()
+
+          // 执行导入
+          const result = await importer.import({
+            configFilePath: importConfig.configFilePath,
+            datasetPath: importConfig.datasetPath, // 向后兼容
+            projectPath: projectPath,
+            projectName: projectName,
+            copyImages: importConfig.copyImages,
+            onProgress: (percent, total, message) => {
+              // 更新遮罩层消息
+              closeLoading(message || `正在导入... ${Math.round(percent)}%`)
+            }
+          })
+
+          // 关闭遮罩层
+          closeLoading()
+          closeLoading = null
+
+          if (result.success) {
+            Object.assign(importStats, result.stats)
+            importErrors.value = result.errors || []
+
+            // 触发事件
+            if (importConfig.target === 'new') {
+              emit('project-created', getCurrentProject())
+            }
+
+            // 触发全局项目变化事件
+            window.dispatchEvent(new CustomEvent('project-changed'))
+            
+            // 跳转到工作台并加载数据
+            const isNewProject = importConfig.target === 'new'
+            const currentProject = getCurrentProject()
+            const workbenchPath = currentProject?.type === 'classification' ? '#/classification' : '#/workbench'
+            
+            // 如果当前不在工作台，先跳转到工作台
+            if (window.location.hash !== workbenchPath) {
+              window.location.hash = workbenchPath
+              // 等待路由切换完成（等待工作台组件挂载）
+              await new Promise(resolve => setTimeout(resolve, 500))
+            }
+            
+                 // 触发数据集导入事件，让工作台加载数据
+                 // 工作台会监听这个事件并加载数据
+                 window.dispatchEvent(new CustomEvent('dataset-imported', {
+                   detail: { isNewProject }
+                 }))
+            
+            // 等待数据加载完成（监听 Workbench 的完成事件）
+            await new Promise((resolve) => {
+              const handleComplete = (event) => {
+                window.removeEventListener('dataset-import-complete', handleComplete)
+                resolve(event.detail)
+              }
+              window.addEventListener('dataset-import-complete', handleComplete)
+            })
+
+            // 显示成功对话框
+            await ElMessageBox({
+              title: '导入成功',
+              message: `
+                <div style="line-height: 1.8;">
+                  <p style="margin-bottom: 12px;">数据集导入成功！</p>
+                  <div style="margin-top: 16px;">
+                    <p><strong>统计信息：</strong></p>
+                    <ul style="margin: 8px 0 0 20px; padding: 0;">
+                      <li>导入图片：${importStats.importedImages || 0} 张</li>
+                      <li>跳过图片：${importStats.skippedImages || 0} 张</li>
+                      <li>导入标注：${importStats.importedAnnotations || 0} 个</li>
+                      <li>总标注数：${importStats.totalAnnotations || 0} 个</li>
+                      ${importStats.categories ? `<li>类别数量：${importStats.categories} 个</li>` : ''}
+                    </ul>
+                    ${importErrors.value.length > 0 ? `<p style="color: #F56C6C; margin-top: 12px;">警告：有 ${importErrors.value.length} 个错误</p>` : ''}
+                  </div>
+                </div>
+              `,
+              dangerouslyUseHTMLString: true,
+              confirmButtonText: '确定',
+              type: 'success'
+            })
+          } else {
+            // 显示失败对话框
+            await ElMessageBox({
+              title: '导入失败',
+              message: `导入数据集失败：${result.error || '未知错误'}`,
+              confirmButtonText: '确定',
+              type: 'error'
+            })
           }
-        })
-
-        if (result.success) {
-          importProgress.status = 'success'
-          importProgress.percent = 100
-          importProgress.message = '导入完成'
-          Object.assign(importStats, result.stats)
-          importErrors.value = result.errors || []
-
-          // 触发事件
-          if (importConfig.target === 'new') {
-            emit('project-created', getCurrentProject())
+        } catch (error) {
+          // 关闭遮罩层
+          if (closeLoading) {
+            closeLoading()
+            closeLoading = null
           }
 
-          // 触发全局项目变化事件
-          window.dispatchEvent(new CustomEvent('project-changed'))
-        } else {
-          importProgress.status = 'exception'
-          importProgress.error = result.error
+          console.error('导入失败:', error)
+          
+          // 显示错误对话框
+          await ElMessageBox({
+            title: '导入失败',
+            message: `导入数据集失败：${error.message || '未知错误'}`,
+            confirmButtonText: '确定',
+            type: 'error'
+          })
         }
       } catch (error) {
-        console.error('导入失败:', error)
-        importProgress.status = 'exception'
-        importProgress.error = error.message
-      } finally {
-        importing.value = false
+        // 如果是在显示遮罩层之前出错，直接显示错误
+        if (error.message !== '该目录已存在YoloMarkFlow项目' && 
+            !error.message.includes('创建项目目录') && 
+            !error.message.includes('写入配置文件')) {
+          console.error('导入失败:', error)
+          ElMessageBox({
+            title: '导入失败',
+            message: `导入数据集失败：${error.message || '未知错误'}`,
+            confirmButtonText: '确定',
+            type: 'error'
+          })
+        } else {
+          throw error
+        }
       }
     }
 
@@ -931,14 +1067,16 @@ export default {
         
         // 判断当前是否在工作台
         const currentPath = window.location.hash.replace('#', '')
+        const currentProject = getCurrentProject()
+        const workbenchPath = currentProject?.type === 'classification' ? '/classification' : '/workbench'
         
-        if (currentPath === '/workbench') {
+        if (currentPath === workbenchPath) {
           // 已经在工作台，事件会触发重新加载
           console.log('已在工作台，等待自动重新加载')
         } else {
           // 不在工作台，跳转过去
           console.log('跳转到工作台')
-          window.location.hash = '#/workbench'
+          window.location.hash = `#${workbenchPath}`
         }
       }, 100)
     }

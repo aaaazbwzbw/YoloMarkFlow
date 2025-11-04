@@ -6,12 +6,29 @@ let loadingInstance = null
 /**
  * 显示全屏加载框
  * @param {String} message 加载提示文本
- * @returns {Function} 关闭加载框的函数
+ * @returns {Function} 关闭加载框的函数，如果传入新消息则更新消息
  */
 export function showLoading(message = '加载中...') {
-  // 如果已经有加载框在显示，先关闭它
+  // 如果已经有加载框在显示，更新消息
   if (loadingInstance) {
-    hideLoading()
+    if (typeof message === 'string') {
+      // 更新消息
+      if (loadingInstance.instance && typeof loadingInstance.instance.updateMessage === 'function') {
+        loadingInstance.instance.updateMessage(message)
+      }
+      return (newMessage) => {
+        if (newMessage && typeof newMessage === 'string') {
+          if (loadingInstance && loadingInstance.instance && typeof loadingInstance.instance.updateMessage === 'function') {
+            loadingInstance.instance.updateMessage(newMessage)
+          }
+        } else {
+          hideLoading()
+        }
+      }
+    } else {
+      // 如果传入的是函数，先关闭旧的
+      hideLoading()
+    }
   }
 
   const container = document.createElement('div')
@@ -40,7 +57,17 @@ export function showLoading(message = '加载中...') {
     container
   }
 
-  return hideLoading
+  return (newMessage) => {
+    if (newMessage && typeof newMessage === 'string') {
+      // 更新消息
+      if (loadingInstance && loadingInstance.instance && typeof loadingInstance.instance.updateMessage === 'function') {
+        loadingInstance.instance.updateMessage(newMessage)
+      }
+    } else {
+      // 关闭遮罩层
+      hideLoading()
+    }
+  }
 }
 
 /**

@@ -165,8 +165,7 @@ export class CocoImporter extends BaseImporter {
       // 3. 类别缓存
       const categoryCache = new Map()
 
-      // 4. 处理每个JSON文件
-      let processedImages = 0
+      // 4. 处理每个JSON文件，需要将进度映射到整个导入过程
       const totalFiles = datasetInfo.jsonFiles.length
 
       for (let i = 0; i < datasetInfo.jsonFiles.length; i++) {
@@ -193,21 +192,25 @@ export class CocoImporter extends BaseImporter {
         }
 
         // 导入图片和标注
+        const fileStartPercent = (i / totalFiles) * 100
+        const fileEndPercent = ((i + 1) / totalFiles) * 100
+        
+        // 为每个 JSON 文件创建进度包装器，将文件的进度映射到整体进度范围
+        const fileProgressWrapper = (percent, total, message) => {
+          if (onProgress) {
+            // 将文件的进度（0-100%）映射到整体进度范围
+            const overallPercent = Math.round(fileStartPercent + (percent / 100) * (fileEndPercent - fileStartPercent))
+            onProgress(overallPercent, 100, message)
+          }
+        }
+        
         const result = await this.importImagesAndAnnotations(
           cocoData,
           jsonFile.imageDir,
           projectName,
           categoryCache,
           copyImages,
-          (current, total) => {
-            processedImages++
-            const progress = 30 + (processedImages / (cocoData.images?.length || 1)) * 60
-            onProgress?.(
-              progress,
-              100,
-              `导入图片 ${processedImages}/${cocoData.images?.length || 0}...`
-            )
-          }
+          fileProgressWrapper
         )
 
         stats.totalImages += result.totalImages
@@ -332,10 +335,10 @@ export class CocoImporter extends BaseImporter {
   async importImagesAndAnnotations(cocoData, imageDir, projectName, categoryCache, copyImages, onProgress) {
     const stats = {
       totalImages: cocoData.images?.length || 0,
-      importedImages: 0,
+      importedImages: 0,  // 实际导入到项目的图片数（在阶段3统计）
       totalAnnotations: 0,
       importedAnnotations: 0,
-      skippedImages: 0  // 添加跳过的图片统计
+      skippedImages: 0   // 跳过的图片数（比如因为某些原因没有导入的）
     }
     const errors = []
 
@@ -355,43 +358,40 @@ export class CocoImporter extends BaseImporter {
       stats.totalAnnotations = cocoData.annotations.length
     }
 
-    // 导入每张图片
-    for (let i = 0; i < cocoData.images.length; i++) {
-      const cocoImage = cocoData.images[i]
+    // 准备图片导入任务数组（先过滤掉不存在的文件）
+    const imageTasks = []
+    for (const cocoImage of cocoData.images) {
+      const imagePath = `${imageDir}/${cocoImage.file_name}`
+      
+      // 检查文件是否存在（提前检查，避免在并发任务中重复检查）
+      if (await this.fileExists(imagePath)) {
+        imageTasks.push({
+          cocoImage,
+          imagePath,
+          imageAnnotations: annotationsByImage.get(cocoImage.id) || []
+        })
+      } else {
+        errors.push({
+          image: cocoImage.file_name,
+          error: '文件不存在'
+        })
+      }
+    }
+
+    // 阶段1：并行复制所有文件（不写入数据库）
+    const { prepareImageImport } = await import('../imagePool')
+    const concurrency = 5
+    
+    const prepareTaskFn = async (task) => {
+      const { cocoImage, imagePath, imageAnnotations } = task
       
       try {
-        // 构建图片路径
-        const imagePath = `${imageDir}/${cocoImage.file_name}`
+        // 准备图片导入（仅复制文件，不写入数据库）
+        const prepared = await prepareImageImport(projectName, imagePath)
         
-        // 检查文件是否存在
-        if (!await this.fileExists(imagePath)) {
-          errors.push({
-            image: cocoImage.file_name,
-            error: '文件不存在'
-          })
-          continue
-        }
-
-        // 导入图片到图片池
-        const imageResult = await this.importImageFile(projectName, imagePath, copyImages)
-        
-        // 添加到项目数据库
-        const addResult = await dbManager.addProjectImage(imageResult.imageId, cocoImage.file_name)
-        
-        if (addResult.isNew) {
-          stats.importedImages++
-        } else {
-          stats.skippedImages++
-          console.log(`跳过重复图片: ${cocoImage.file_name}`)
-        }
-
-        // 获取该图片的标注
-        const imageAnnotations = annotationsByImage.get(cocoImage.id) || []
-        
+        // 转换标注格式（如果存在）
+        const convertedAnnotations = []
         if (imageAnnotations.length > 0) {
-          // 转换标注格式
-          const convertedAnnotations = []
-          
           for (const ann of imageAnnotations) {
             try {
               // 获取类别ID（从COCO ID映射到我们的ID）
@@ -412,27 +412,193 @@ export class CocoImporter extends BaseImporter {
                 categoryId,
                 bbox
               })
-              
-              stats.importedAnnotations++
             } catch (error) {
               console.error(`转换标注失败:`, error)
             }
           }
-
-          // 保存标注
-          if (convertedAnnotations.length > 0) {
-            await this.saveAnnotations(imageResult.imageId, convertedAnnotations)
-          }
         }
-
-        onProgress?.(i + 1, cocoData.images.length)
+        
+        return {
+          prepared,
+          fileName: cocoImage.file_name,
+          annotations: convertedAnnotations
+        }
       } catch (error) {
-        errors.push({
-          image: cocoImage.file_name,
-          error: error.message
-        })
-        console.error(`导入图片失败 ${cocoImage.file_name}:`, error)
+        console.error(`准备图片导入失败 ${cocoImage.file_name}:`, error)
+        throw error
       }
+    }
+    
+      // 定义各阶段的进度范围
+      const PROGRESS_STAGE1_END = 40  // 阶段1：0-40%
+      const PROGRESS_STAGE2_END = 50  // 阶段2：40-50%
+      const PROGRESS_STAGE3_END = 100 // 阶段3和4并行：50-100%
+
+    const prepareResult = await this.importBatch(
+      imageTasks,
+      prepareTaskFn,
+      concurrency,
+      (completed, total) => {
+        const percent = Math.round((completed / total) * PROGRESS_STAGE1_END)
+        onProgress?.(percent, 100, `复制文件 ${completed}/${total}`)
+      }
+    )
+    
+    errors.push(...prepareResult.errors)
+
+    // 阶段2：批量写入数据库
+    const newImages = prepareResult.results
+      .filter(r => r.success && r.result && r.result.prepared && r.result.prepared.isNewFile)
+      .map(r => ({
+        hash: r.result.prepared.hash,
+        filename: r.result.prepared.filename,
+        destPath: r.result.prepared.destPath,
+        projectName
+      }))
+
+    const existingImages = prepareResult.results
+      .filter(r => r.success && r.result && r.result.prepared && !r.result.prepared.isNewFile)
+      .map(r => ({
+        imageId: r.result.prepared.existingImageId,
+        fileName: r.result.fileName,
+        annotations: r.result.annotations
+      }))
+
+    // 批量插入新图片到数据库
+    let newImageResults = []
+    if (newImages.length > 0) {
+      onProgress?.(PROGRESS_STAGE1_END, 100, '写入数据库...')
+      const { batchInsertImages } = await import('../imagePool')
+      newImageResults = await batchInsertImages(newImages)
+      // 注意：这里不统计 importedImages，因为图片只是添加到图片池，还没有添加到项目
+      // importedImages 应该在阶段3（添加项目引用）时统计
+      onProgress?.(PROGRESS_STAGE2_END, 100, `已写入 ${newImageResults.length} 张图片到数据库`)
+    } else {
+      onProgress?.(PROGRESS_STAGE2_END, 100, '跳过数据库写入（无新图片）')
+    }
+
+    // 合并所有图片结果（新导入 + 已存在）
+    const allImageResults = []
+    
+    // 添加新导入的图片
+    for (let i = 0; i < newImageResults.length; i++) {
+      const imageResult = newImageResults[i]
+      const taskResult = prepareResult.results.find(r => 
+        r.success && r.result.prepared.hash === imageResult.hash
+      )
+      if (taskResult) {
+        allImageResults.push({
+          imageId: imageResult.imageId,
+          fileName: taskResult.result.fileName,
+          annotations: taskResult.result.annotations
+        })
+      }
+    }
+    
+    // 添加已存在的图片
+    for (const existing of existingImages) {
+      allImageResults.push(existing)
+      // 注意：已存在的图片如果被添加到项目中，也应该计入 importedImages
+      // skippedImages 应该表示"跳过的图片"（比如因为某些原因没有导入的），而不是"已存在但成功导入的"
+      // 所以这里不增加 skippedImages，而是在后面统计实际添加到项目的图片数
+    }
+
+    // 阶段3和4：并行执行 - 批量添加项目引用和批量保存标注
+    const projectImageTasks = allImageResults.map(img => ({
+      imageId: img.imageId,
+      fileName: img.fileName
+    }))
+    
+    const annotationTasks = allImageResults
+      .filter(img => img.annotations && img.annotations.length > 0)
+      .map(img => ({
+        imageId: img.imageId,
+        annotations: img.annotations
+      }))
+    
+    const addProjectImageTaskFn = async (task) => {
+      const addResult = await dbManager.addProjectImage(task.imageId, task.fileName)
+      // 统计实际添加到项目的图片数（不管是新图片还是已存在的图片，只要成功添加到项目，就计入导入）
+      if (addResult.isNew) {
+        // 新添加到项目的图片引用
+        stats.importedImages++
+      } else {
+        // 已存在的图片引用（图片池中已有，但项目中没有，现在添加到了项目）
+        // 这种情况也应该计入导入，因为这是"导入到项目"的操作
+        stats.importedImages++
+      }
+      return { task, addResult }
+    }
+    
+    const saveAnnotationTaskFn = async (task) => {
+      try {
+        await this.saveAnnotations(task.imageId, task.annotations)
+        stats.totalAnnotations += task.annotations.length
+        stats.importedAnnotations += task.annotations.length
+      } catch (error) {
+        console.warn(`保存标注失败 imageId=${task.imageId}:`, error)
+        // 标注保存失败不影响整体导入
+      }
+    }
+    
+    // 并行执行两个任务，使用统一的进度跟踪
+    let projectImageCompleted = 0
+    let annotationCompleted = 0
+    const projectImageTotal = projectImageTasks.length
+    const annotationTotal = annotationTasks.length
+    const totalTasks = projectImageTotal + annotationTotal
+    
+    const updateProgress = () => {
+      const totalCompleted = projectImageCompleted + annotationCompleted
+      const progress = totalCompleted / totalTasks
+      const percent = Math.round(PROGRESS_STAGE2_END + progress * (PROGRESS_STAGE3_END - PROGRESS_STAGE2_END))
+      
+      // 构建进度消息
+      const messages = []
+      if (projectImageCompleted < projectImageTotal) {
+        messages.push(`添加项目引用 ${projectImageCompleted}/${projectImageTotal}`)
+      }
+      if (annotationCompleted < annotationTotal) {
+        messages.push(`保存标注 ${annotationCompleted}/${annotationTotal}`)
+      }
+      const message = messages.length > 0 ? messages.join(' | ') : '完成'
+      
+      onProgress?.(percent, 100, message)
+    }
+    
+    const [projectImageResult, annotationResult] = await Promise.all([
+      // 任务1：添加项目引用
+      this.importBatch(
+        projectImageTasks,
+        addProjectImageTaskFn,
+        concurrency,
+        (completed, total) => {
+          projectImageCompleted = completed
+          updateProgress()
+        }
+      ),
+      // 任务2：保存标注
+      annotationTasks.length > 0
+        ? this.importBatch(
+            annotationTasks,
+            saveAnnotationTaskFn,
+            concurrency,
+            (completed, total) => {
+              annotationCompleted = completed
+              updateProgress()
+            }
+          )
+        : Promise.resolve({ results: [], errors: [] })
+    ])
+    
+    errors.push(...projectImageResult.errors)
+    errors.push(...annotationResult.errors)
+    
+    // 如果两个任务都完成，显示完成消息
+    if (projectImageTasks.length > 0 || annotationTasks.length > 0) {
+      onProgress?.(PROGRESS_STAGE3_END, 100, '导入完成')
+    } else {
+      onProgress?.(PROGRESS_STAGE3_END, 100, '导入完成')
     }
 
     return { ...stats, errors }

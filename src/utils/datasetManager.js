@@ -217,51 +217,87 @@ export async function createDataset(name, projectSelections, options = {}) {
             
             onProgress?.(completedTasks, totalTasks, `正在处理图片和标注：${category.name} (${imageIds.length} 张图片, ${annotationsResult.data.length} 个标注)...`)
             
-            // 对每个image_id，插入dataset_images（如果还未插入）
-            for (const imageId of imageIds) {
-              // 检查image是否已在数据集中
-              const existingImageResult = await window.electronAPI.querySQL(
-                dbPath,
-                'SELECT id FROM dataset_images WHERE image_id = ?',
-                [imageId]
+            // 批量查询所有图片是否已在数据集中
+            const imageIdPlaceholders = imageIds.map(() => '?').join(',')
+            const existingImagesResult = await window.electronAPI.querySQL(
+              dbPath,
+              `SELECT image_id FROM dataset_images WHERE image_id IN (${imageIdPlaceholders})`,
+              imageIds
+            )
+            
+            const existingImageIds = new Set()
+            if (existingImagesResult.success && existingImagesResult.data) {
+              existingImagesResult.data.forEach(row => {
+                existingImageIds.add(row.image_id)
+              })
+            }
+            
+            // 批量获取需要插入的图片的原始文件名
+            const newImageIds = imageIds.filter(id => !existingImageIds.has(id))
+            const newImageData = []
+            
+            if (newImageIds.length > 0) {
+              // 批量查询项目中的图片信息
+              const imageIdPlaceholders2 = newImageIds.map(() => '?').join(',')
+              const projectImagesResult = await window.electronAPI.querySQL(
+                projectDbPath,
+                `SELECT image_id, original_name FROM project_images WHERE image_id IN (${imageIdPlaceholders2})`,
+                newImageIds
               )
               
-              if (!existingImageResult.data || existingImageResult.data.length === 0) {
-                // 从项目数据库获取原始文件名
-                const projectImageResult = await window.electronAPI.querySQL(
-                  projectDbPath,
-                  'SELECT original_name FROM project_images WHERE image_id = ?',
-                  [imageId]
-                )
-                
-                const originalName = projectImageResult.data?.[0]?.original_name || 'unknown.jpg'
-                
-                // 插入到数据集
-                await window.electronAPI.runSQL(
-                  dbPath,
-                  'INSERT INTO dataset_images (image_id, source_project, original_name) VALUES (?, ?, ?)',
-                  [imageId, projectName, originalName]
-                )
-                
-                stats.totalImages++
+              if (projectImagesResult.success && projectImagesResult.data) {
+                for (const row of projectImagesResult.data) {
+                  newImageData.push({
+                    image_id: row.image_id,
+                    original_name: row.original_name || 'unknown.jpg'
+                  })
+                }
+              }
+              
+              // 批量插入 dataset_images
+              if (newImageData.length > 0) {
+                // 使用事务批量插入
+                await window.electronAPI.execSQL(dbPath, 'BEGIN TRANSACTION')
+                try {
+                  for (const imageData of newImageData) {
+                    await window.electronAPI.runSQL(
+                      dbPath,
+                      'INSERT INTO dataset_images (image_id, source_project, original_name) VALUES (?, ?, ?)',
+                      [imageData.image_id, projectName, imageData.original_name]
+                    )
+                  }
+                  await window.electronAPI.execSQL(dbPath, 'COMMIT')
+                  stats.totalImages += newImageData.length
+                } catch (error) {
+                  await window.electronAPI.execSQL(dbPath, 'ROLLBACK')
+                  throw error
+                }
               }
             }
             
-            // 插入标注
-            for (const annotation of annotationsResult.data) {
-              await window.electronAPI.runSQL(
-                dbPath,
-                'INSERT INTO annotations (image_id, category_id, position) VALUES (?, ?, ?)',
-                [annotation.image_id, datasetCategoryId, annotation.position]
-              )
-              
-              stats.totalAnnotations++
-              
-              // 更新类别计数
-              if (!stats.categoryCounts[category.name]) {
-                stats.categoryCounts[category.name] = 0
+            // 批量插入标注（使用事务）
+            if (annotationsResult.data.length > 0) {
+              await window.electronAPI.execSQL(dbPath, 'BEGIN TRANSACTION')
+              try {
+                for (const annotation of annotationsResult.data) {
+                  await window.electronAPI.runSQL(
+                    dbPath,
+                    'INSERT INTO annotations (image_id, category_id, position) VALUES (?, ?, ?)',
+                    [annotation.image_id, datasetCategoryId, annotation.position]
+                  )
+                  stats.totalAnnotations++
+                  
+                  // 更新类别计数
+                  if (!stats.categoryCounts[category.name]) {
+                    stats.categoryCounts[category.name] = 0
+                  }
+                  stats.categoryCounts[category.name]++
+                }
+                await window.electronAPI.execSQL(dbPath, 'COMMIT')
+              } catch (error) {
+                await window.electronAPI.execSQL(dbPath, 'ROLLBACK')
+                throw error
               }
-              stats.categoryCounts[category.name]++
             }
           }
         }
@@ -962,6 +998,284 @@ export async function deleteDataset(datasetName, options = {}) {
   }
 }
 
+/**
+ * 将数据集回溯到项目（将数据集的所有图片和标注添加到当前项目）
+ * @param {string} datasetName - 数据集名称
+ * @param {string} projectPath - 项目路径
+ * @param {Object} options - 选项
+ * @param {Function} options.onProgress - 进度回调函数 (current, total, message) => void
+ * @returns {Promise<Object>} 回溯结果
+ */
+export async function restoreDatasetToProject(datasetName, projectPath, options = {}) {
+  const { onProgress } = options
+  const openedDatabases = []
+  
+  try {
+    // 1. 获取数据集路径
+    const datasetsPath = await getDatasetsPath()
+    const datasetPath = `${datasetsPath}/${datasetName}`
+    const datasetDbPath = `${datasetPath}/annotations.db`
+    
+    // 2. 打开数据集数据库
+    await window.electronAPI.openDatabase(datasetDbPath)
+    openedDatabases.push(datasetDbPath)
+    
+    // 3. 打开项目数据库
+    const projectDbPath = `${projectPath}/annotations.db`
+    await window.electronAPI.openDatabase(projectDbPath)
+    openedDatabases.push(projectDbPath)
+    
+    // 4. 读取数据集的所有数据
+    onProgress?.(0, 100, '正在读取数据集数据...')
+    
+    // 读取图片
+    const imagesResult = await window.electronAPI.querySQL(
+      datasetDbPath,
+      'SELECT * FROM dataset_images'
+    )
+    if (!imagesResult.success) {
+      throw new Error('读取数据集图片失败: ' + imagesResult.error)
+    }
+    const datasetImages = imagesResult.data || []
+    
+    // 读取类别
+    const categoriesResult = await window.electronAPI.querySQL(
+      datasetDbPath,
+      'SELECT * FROM categories ORDER BY id'
+    )
+    if (!categoriesResult.success) {
+      throw new Error('读取数据集类别失败: ' + categoriesResult.error)
+    }
+    const datasetCategories = categoriesResult.data || []
+    
+    // 读取标注
+    const annotationsResult = await window.electronAPI.querySQL(
+      datasetDbPath,
+      'SELECT * FROM annotations'
+    )
+    if (!annotationsResult.success) {
+      throw new Error('读取数据集标注失败: ' + annotationsResult.error)
+    }
+    const datasetAnnotations = annotationsResult.data || []
+    
+    onProgress?.(10, 100, `读取完成: ${datasetImages.length} 张图片, ${datasetCategories.length} 个类别, ${datasetAnnotations.length} 个标注`)
+    
+    // 5. 读取项目中的类别（用于映射）
+    const projectCategoriesResult = await window.electronAPI.querySQL(
+      projectDbPath,
+      'SELECT * FROM categories ORDER BY id'
+    )
+    if (!projectCategoriesResult.success) {
+      throw new Error('读取项目类别失败: ' + projectCategoriesResult.error)
+    }
+    const projectCategories = projectCategoriesResult.data || []
+    
+    // 6. 创建类别映射（数据集 category_id -> 项目 category_id）
+    const categoryMap = new Map() // datasetCategoryId -> projectCategoryId
+    
+    onProgress?.(15, 100, '正在映射类别...')
+    
+    for (const datasetCategory of datasetCategories) {
+      // 查找项目中是否已有相同名称的类别
+      let projectCategoryId = null
+      const existingCategory = projectCategories.find(
+        cat => cat.name === datasetCategory.name
+      )
+      
+      if (existingCategory) {
+        // 使用已有的类别
+        projectCategoryId = existingCategory.id
+        console.log(`类别 "${datasetCategory.name}" 已存在于项目中，使用现有类别 ID: ${projectCategoryId}`)
+      } else {
+        // 创建新类别
+        const addResult = await window.electronAPI.runSQL(
+          projectDbPath,
+          'INSERT INTO categories (name, color) VALUES (?, ?)',
+          [datasetCategory.name, datasetCategory.color]
+        )
+        if (!addResult.success) {
+          throw new Error('添加类别失败: ' + addResult.error)
+        }
+        projectCategoryId = addResult.result.lastInsertRowid
+        console.log(`类别 "${datasetCategory.name}" 已添加到项目，新类别 ID: ${projectCategoryId}`)
+      }
+      
+      categoryMap.set(datasetCategory.id, projectCategoryId)
+    }
+    
+    onProgress?.(20, 100, `类别映射完成: ${categoryMap.size} 个类别`)
+    
+    // 7. 添加图片到项目（使用批量操作）
+    const stats = {
+      totalImages: datasetImages.length,
+      addedImages: 0,
+      skippedImages: 0,
+      totalAnnotations: datasetAnnotations.length,
+      addedAnnotations: 0
+    }
+    
+    // 批量检查图片是否已在项目中
+    const imageIds = datasetImages.map(img => img.image_id)
+    const imageIdPlaceholders = imageIds.map(() => '?').join(',')
+    const existingImagesResult = await window.electronAPI.querySQL(
+      projectDbPath,
+      `SELECT image_id FROM project_images WHERE image_id IN (${imageIdPlaceholders})`,
+      imageIds
+    )
+    
+    const existingImageIds = new Set()
+    if (existingImagesResult.success && existingImagesResult.data) {
+      existingImagesResult.data.forEach(row => {
+        existingImageIds.add(row.image_id)
+      })
+    }
+    
+    // 批量添加图片引用
+    onProgress?.(25, 100, `正在添加图片到项目...`)
+    
+    const newImageIds = []
+    for (let i = 0; i < datasetImages.length; i++) {
+      const datasetImage = datasetImages[i]
+      
+      if (existingImageIds.has(datasetImage.image_id)) {
+        // 图片已在项目中，跳过
+        stats.skippedImages++
+        console.log(`图片 ${datasetImage.image_id} 已存在于项目中，跳过`)
+      } else {
+        // 添加图片引用
+        const addResult = await window.electronAPI.runSQL(
+          projectDbPath,
+          'INSERT INTO project_images (image_id, original_name, imported_at) VALUES (?, ?, ?)',
+          [datasetImage.image_id, datasetImage.original_name, new Date().toISOString()]
+        )
+        if (!addResult.success) {
+          console.warn(`添加图片 ${datasetImage.image_id} 失败:`, addResult.error)
+        } else {
+          stats.addedImages++
+          newImageIds.push(datasetImage.image_id)
+        }
+      }
+      
+      if ((i + 1) % 10 === 0) {
+        onProgress?.(25 + Math.round((i + 1) / datasetImages.length * 30), 100, `正在添加图片 ${i + 1}/${datasetImages.length}...`)
+      }
+    }
+    
+    onProgress?.(55, 100, `图片添加完成: 新增 ${stats.addedImages} 张, 跳过 ${stats.skippedImages} 张`)
+    
+    // 8. 添加标注到项目（按图片分组，批量保存）
+    onProgress?.(60, 100, '正在添加标注到项目...')
+    
+    // 按图片分组标注
+    const annotationsByImage = new Map() // imageId -> [annotations]
+    for (const datasetAnnotation of datasetAnnotations) {
+      const imageId = datasetAnnotation.image_id
+      const datasetCategoryId = datasetAnnotation.category_id
+      const projectCategoryId = categoryMap.get(datasetCategoryId)
+      
+      if (!projectCategoryId) {
+        console.warn(`类别映射失败: 数据集类别 ID ${datasetCategoryId} 未找到对应的项目类别`)
+        continue
+      }
+      
+      if (!annotationsByImage.has(imageId)) {
+        annotationsByImage.set(imageId, [])
+      }
+      
+      // 解析 position（如果存在）
+      let position = null
+      if (datasetAnnotation.position) {
+        try {
+          const positionData = JSON.parse(datasetAnnotation.position)
+          position = {
+            centerX: positionData.center_x,
+            centerY: positionData.center_y,
+            width: positionData.width,
+            height: positionData.height
+          }
+        } catch (error) {
+          console.warn(`解析标注 position 失败:`, error)
+        }
+      }
+      
+      annotationsByImage.get(imageId).push({
+        classId: projectCategoryId,
+        position: position
+      })
+    }
+    
+    // 批量保存标注
+    const annotationEntries = Array.from(annotationsByImage.entries())
+    for (let i = 0; i < annotationEntries.length; i++) {
+      const [imageId, annotations] = annotationEntries[i]
+      
+      // 使用 saveImageAnnotations 方法保存标注
+      // 注意：这里会覆盖该图片的现有标注
+      try {
+        await window.electronAPI.runSQL(
+          projectDbPath,
+          'DELETE FROM annotations WHERE image_id = ?',
+          [imageId]
+        )
+        
+        for (const annotation of annotations) {
+          if (annotation.position) {
+            const positionJson = JSON.stringify({
+              center_x: annotation.position.centerX,
+              center_y: annotation.position.centerY,
+              width: annotation.position.width,
+              height: annotation.position.height
+            })
+            await window.electronAPI.runSQL(
+              projectDbPath,
+              'INSERT INTO annotations (image_id, class_id, position) VALUES (?, ?, ?)',
+              [imageId, annotation.classId, positionJson]
+            )
+          } else {
+            await window.electronAPI.runSQL(
+              projectDbPath,
+              'INSERT INTO annotations (image_id, class_id, position) VALUES (?, ?, ?)',
+              [imageId, annotation.classId, null]
+            )
+          }
+          stats.addedAnnotations++
+        }
+      } catch (error) {
+        console.warn(`保存标注失败 imageId=${imageId}:`, error)
+      }
+      
+      if ((i + 1) % 10 === 0) {
+        onProgress?.(60 + Math.round((i + 1) / annotationEntries.length * 35), 100, `正在保存标注 ${i + 1}/${annotationEntries.length}...`)
+      }
+    }
+    
+    onProgress?.(95, 100, '回溯完成')
+    
+    console.log('数据集回溯成功:', {
+      datasetName,
+      projectPath,
+      stats
+    })
+    
+    return {
+      success: true,
+      stats
+    }
+  } catch (error) {
+    console.error('数据集回溯失败:', error)
+    throw error
+  } finally {
+    // 关闭所有打开的数据库连接
+    for (const dbPath of openedDatabases) {
+      try {
+        await window.electronAPI.closeDatabase(dbPath)
+      } catch (closeError) {
+        console.warn(`关闭数据库连接失败 (${dbPath}):`, closeError)
+      }
+    }
+  }
+}
+
 export default {
   listDatasets,
   createDataset,
@@ -969,6 +1283,7 @@ export default {
   updateDataset,
   switchDatasetVersion,
   deleteDataset,
-  deleteDatasetVersion
+  deleteDatasetVersion,
+  restoreDatasetToProject
 }
 

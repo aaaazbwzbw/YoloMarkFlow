@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fileExists: (filePath) => ipcRenderer.invoke('file:exists', filePath),
   getFileInfo: (filePath) => ipcRenderer.invoke('file:getInfo', filePath),
   copyFile: (sourcePath, destPath) => ipcRenderer.invoke('file:copy', sourcePath, destPath),
+  moveFile: (sourcePath, destPath) => ipcRenderer.invoke('file:move', sourcePath, destPath),
   deleteFile: (filePath) => ipcRenderer.invoke('file:delete', filePath),
   readJSON: (filePath) => ipcRenderer.invoke('file:readJSON', filePath),
   readText: (filePath) => ipcRenderer.invoke('file:readText', filePath),

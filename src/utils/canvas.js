@@ -33,6 +33,15 @@ export class AnnotationCanvas {
     this.displayHeight = 0
     this.scale = 1
     
+    // 虚线尺相关
+    this.crosshairLines = null // 虚线尺对象 { horizontal: Line, vertical: Line }
+    this.crosshairEnabled = true // 是否启用虚线尺
+    this.rafId = null // requestAnimationFrame ID，用于性能优化
+    this.lastCrosshairX = -1 // 上次虚线尺的X位置，用于判断是否需要更新
+    this.lastCrosshairY = -1 // 上次虚线尺的Y位置，用于判断是否需要更新
+    this.crosshairRenderPending = false // 是否有待渲染的虚线尺更新
+    // 注意：不再使用时间节流，让 requestAnimationFrame 自动匹配屏幕刷新率（支持60Hz/120Hz等）
+    
     this.setupCanvas()
   }
   
@@ -57,6 +66,10 @@ export class AnnotationCanvas {
     this.canvas.on('mouse:down', this.handleMouseDown.bind(this))
     this.canvas.on('mouse:move', this.handleMouseMove.bind(this))
     this.canvas.on('mouse:up', this.handleMouseUp.bind(this))
+    
+    // 监听鼠标移动用于更新虚线尺
+    this.canvas.on('mouse:move', this.handleCrosshairMove.bind(this))
+    this.canvas.on('mouse:out', this.handleCrosshairOut.bind(this))
     
     // 监听右键菜单事件
     this.canvas.on('mouse:down', this.handleRightClick.bind(this))
@@ -230,6 +243,16 @@ export class AnnotationCanvas {
     this.displayWidth = newDisplayWidth
     this.displayHeight = newDisplayHeight
     
+    // 如果虚线尺已创建，更新其尺寸
+    if (this.crosshairLines) {
+      this.crosshairLines.horizontal.set({
+        x2: this.displayWidth
+      })
+      this.crosshairLines.vertical.set({
+        y2: this.displayHeight
+      })
+    }
+    
     this.canvas.renderAll()
   }
   
@@ -325,7 +348,207 @@ export class AnnotationCanvas {
       this.currentRect.set({ height: Math.abs(height) })
     }
     
+    // 如果虚线尺有待渲染的更新，一起渲染（避免双重渲染）
+    // 在绘制时，虚线尺的更新会和绘制矩形一起渲染，减少渲染次数
+    if (this.crosshairRenderPending) {
+      this.crosshairRenderPending = false
+    }
+    
+    // 渲染画布（绘制时不需要节流，需要实时响应）
     this.canvas.renderAll()
+  }
+  
+  // 创建虚线尺
+  createCrosshairLines() {
+    if (this.crosshairLines) {
+      return // 已创建，不重复创建
+    }
+    
+    // 确保 displayWidth 和 displayHeight 已初始化
+    const width = this.displayWidth || this.canvas.width || 1000
+    const height = this.displayHeight || this.canvas.height || 1000
+    
+    const lineStyle = {
+      stroke: '#ffffff', // 白色
+      strokeWidth: 1,
+      strokeDashArray: [5, 5], // 虚线样式
+      selectable: false,
+      evented: false, // 不响应事件
+      excludeFromExport: true, // 导出时不包含
+      strokeUniform: true, // 禁用strokeWidth随缩放变化
+      visible: true, // 初始可见
+      objectCaching: false // 禁用缓存，确保实时渲染
+    }
+    
+    // 创建水平线 [x1, y1, x2, y2]
+    const horizontalLine = new fabric.Line([0, 0, width, 0], lineStyle)
+    
+    // 创建垂直线 [x1, y1, x2, y2]
+    const verticalLine = new fabric.Line([0, 0, 0, height], lineStyle)
+    
+    // 设置层级，确保在所有对象之上
+    horizontalLine.moveTo = function() {
+      this.bringToFront()
+    }
+    verticalLine.moveTo = function() {
+      this.bringToFront()
+    }
+    
+    this.crosshairLines = {
+      horizontal: horizontalLine,
+      vertical: verticalLine
+    }
+    
+    // 添加到画布
+    this.canvas.add(horizontalLine)
+    this.canvas.add(verticalLine)
+    
+    // 确保在最上层
+    horizontalLine.bringToFront()
+    verticalLine.bringToFront()
+  }
+  
+  // 更新虚线尺位置（优化性能版本）
+  updateCrosshair(event) {
+    if (!this.crosshairEnabled || !this.imageObject) {
+      return
+    }
+    
+    // 如果还未创建虚线尺，先创建
+    if (!this.crosshairLines) {
+      this.createCrosshairLines()
+    }
+    
+    // 确保 displayWidth 和 displayHeight 有效
+    if (!this.displayWidth || !this.displayHeight) {
+      return
+    }
+    
+    // 使用 requestAnimationFrame 优化性能
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId)
+    }
+    
+    this.rafId = requestAnimationFrame(() => {
+      const pointer = this.canvas.getPointer(event.e)
+      
+      // 限制在图片显示区域内
+      const x = Math.max(0, Math.min(pointer.x, this.displayWidth))
+      const y = Math.max(0, Math.min(pointer.y, this.displayHeight))
+      
+      // 检查位置是否真的改变了（避免不必要的更新）
+      // 首次显示时（lastCrosshairX/Y 为 -1），需要强制更新
+      const isFirstUpdate = this.lastCrosshairX === -1 || this.lastCrosshairY === -1
+      const xChanged = isFirstUpdate || Math.abs(x - this.lastCrosshairX) > 0.5
+      const yChanged = isFirstUpdate || Math.abs(y - this.lastCrosshairY) > 0.5
+      
+      if (!xChanged && !yChanged && !isFirstUpdate) {
+        // 位置没有变化，不需要更新
+        this.rafId = null
+        return
+      }
+      
+      // 更新位置记录
+      this.lastCrosshairX = x
+      this.lastCrosshairY = y
+      
+      // 确保虚线尺可见
+      if (!this.crosshairLines.horizontal.visible) {
+        this.crosshairLines.horizontal.set({ visible: true })
+        this.crosshairLines.vertical.set({ visible: true })
+        this.crosshairLines.horizontal.bringToFront()
+        this.crosshairLines.vertical.bringToFront()
+      }
+      
+      // 更新水平线位置
+      if (yChanged || isFirstUpdate) {
+        // 直接更新 Line 的坐标（Fabric.js Line 使用 x1, y1, x2, y2）
+        this.crosshairLines.horizontal.set({
+          x1: 0,
+          y1: y,
+          x2: this.displayWidth,
+          y2: y
+        })
+        // 更新边界框
+        this.crosshairLines.horizontal.setCoords()
+      }
+      
+      // 更新垂直线位置
+      if (xChanged || isFirstUpdate) {
+        // 直接更新 Line 的坐标（Fabric.js Line 使用 x1, y1, x2, y2）
+        this.crosshairLines.vertical.set({
+          x1: x,
+          y1: 0,
+          x2: x,
+          y2: this.displayHeight
+        })
+        // 更新边界框
+        this.crosshairLines.vertical.setCoords()
+      }
+      
+      // 标记有待渲染的更新
+      this.crosshairRenderPending = true
+      
+      // 如果不在绘制状态，每次都渲染（避免拖影）
+      // 如果在绘制状态，延迟渲染，等待 handleMouseMove 的 renderAll 一起渲染
+      if (!this.isDrawing || !this.currentRect) {
+        // 每次位置变化时都立即渲染，确保清除旧线条，避免拖影
+        // requestAnimationFrame 会自动匹配屏幕刷新率（60Hz/120Hz等），无需手动节流
+        this.canvas.renderAll()
+        this.crosshairRenderPending = false
+      } else {
+        // 在绘制状态下，标记需要渲染，但由 handleMouseMove 统一处理
+        // 这样可以避免在绘制时出现拖影
+      }
+      
+      this.rafId = null
+    })
+  }
+  
+  // 隐藏虚线尺
+  hideCrosshair() {
+    if (this.crosshairLines) {
+      this.crosshairLines.horizontal.set({ visible: false })
+      this.crosshairLines.vertical.set({ visible: false })
+      this.lastCrosshairX = -1
+      this.lastCrosshairY = -1
+      this.crosshairRenderPending = false
+      this.canvas.renderAll()
+    }
+  }
+  
+  // 处理鼠标移动（虚线尺）
+  handleCrosshairMove(event) {
+    if (!this.imageObject) {
+      return
+    }
+    
+    // 无论是否在绘制，都显示虚线尺
+    this.updateCrosshair(event)
+  }
+  
+  // 处理鼠标离开画布（隐藏虚线尺）
+  handleCrosshairOut(event) {
+    this.hideCrosshair()
+    
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
+  }
+  
+  // 销毁虚线尺
+  destroyCrosshairLines() {
+    if (this.crosshairLines) {
+      this.canvas.remove(this.crosshairLines.horizontal)
+      this.canvas.remove(this.crosshairLines.vertical)
+      this.crosshairLines = null
+    }
+    
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId)
+      this.rafId = null
+    }
   }
   
   // 鼠标释放
@@ -938,7 +1161,7 @@ export class AnnotationCanvas {
         }
         // 强制重新渲染
         obj.dirty = true
-        this.canvas.requestRenderAll()
+        this.canvas.renderAll()
       }
     }
   }
@@ -1181,6 +1404,9 @@ export class AnnotationCanvas {
   
   // 清除画布
   clear() {
+    // 销毁虚线尺
+    this.destroyCrosshairLines()
+    
     this.canvas.clear()
     this.annotations = []
     this.currentImage = null
@@ -1230,6 +1456,9 @@ export class AnnotationCanvas {
   
   // 销毁画布
   destroy() {
+    // 销毁虚线尺
+    this.destroyCrosshairLines()
+    
     if (this.canvas) {
       this.canvas.dispose()
       this.canvas = null

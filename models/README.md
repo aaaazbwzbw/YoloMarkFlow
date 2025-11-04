@@ -1,0 +1,1 @@
+##请将模型文件放置到此目录。并且命名为yolov**.pt,如yolov5n.pt/yolov11m.pt

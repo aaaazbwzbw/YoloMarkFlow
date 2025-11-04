@@ -4,7 +4,7 @@
       <div v-if="visible" class="loading-overlay" @click.stop>
         <div class="loading-content">
           <div class="spinner"></div>
-          <div class="loading-text">{{ message }}</div>
+          <div class="loading-text">{{ currentMessage || message }}</div>
         </div>
       </div>
     </transition>
@@ -23,10 +23,20 @@ export default {
   emits: ['close'],
   data() {
     return {
-      visible: false
+      visible: false,
+      currentMessage: ''
+    }
+  },
+  watch: {
+    message: {
+      immediate: true,
+      handler(newMessage) {
+        this.currentMessage = newMessage
+      }
     }
   },
   mounted() {
+    this.currentMessage = this.message
     this.$nextTick(() => {
       this.visible = true
     })
@@ -37,6 +47,9 @@ export default {
       setTimeout(() => {
         this.$emit('close')
       }, 300)
+    },
+    updateMessage(newMessage) {
+      this.currentMessage = newMessage
     }
   }
 }

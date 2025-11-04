@@ -402,22 +402,38 @@ async function createWindow() {
     }
   })
 
+  // 获取图片池工作空间路径（与渲染进程的 getImagePoolWorkspacePath() 保持一致）
+  async function getImagePoolWorkspacePath() {
+    // 优先使用用户配置的路径（从 localStorage 读取，但主进程无法直接访问）
+    // 这里先使用默认路径，如果需要支持自定义路径，需要添加一个 IPC 处理器来获取
+    // 默认路径与 getDatasetsPath() 保持一致
+    return 'D:\\YoloMarkFlow\\YoloMarkFlow_ImagePool'
+  }
+
   // 查找所有数据集
   ipcMain.handle('dataset:findAll', async (event) => {
     try {
-      const workspacePath = getWorkspacePath()
-      const datasetsPath = path.join(workspacePath, 'datasets')
+      // 获取图片池工作空间路径（与 getDatasetsPath() 保持一致）
+      const imagePoolWorkspacePath = await getImagePoolWorkspacePath()
+      
+      // 数据集目录在图片池工作空间下的 datasets 目录
+      const datasetsPath = path.join(imagePoolWorkspacePath, 'datasets')
+      
+      console.log(`[dataset:findAll] 扫描数据集目录: ${datasetsPath}`)
       
       // 确保数据集目录存在
       try {
         await fs.access(datasetsPath)
       } catch {
+        console.log(`[dataset:findAll] 数据集目录不存在: ${datasetsPath}`)
         return { success: true, datasets: [] }
       }
       
       // 列出所有数据集目录
       const datasets = []
       const entries = await fs.readdir(datasetsPath, { withFileTypes: true })
+      
+      console.log(`[dataset:findAll] 找到 ${entries.length} 个目录/文件`)
       
       for (const entry of entries) {
         if (entry.isDirectory()) {
@@ -427,14 +443,18 @@ async function createWindow() {
           try {
             await fs.access(dbPath)
             datasets.push(datasetPath)
+            console.log(`[dataset:findAll] 找到数据集: ${datasetPath}`)
           } catch {
             // 不是有效的数据集目录
+            console.log(`[dataset:findAll] 跳过无效数据集目录（无 annotations.db）: ${datasetPath}`)
           }
         }
       }
       
+      console.log(`[dataset:findAll] 共找到 ${datasets.length} 个有效数据集`)
       return { success: true, datasets }
     } catch (error) {
+      console.error('[dataset:findAll] 查找数据集失败:', error)
       return { success: false, error: error.message }
     }
   })
@@ -1465,6 +1485,20 @@ async function createWindow() {
       await fs.mkdir(destDir, { recursive: true })
       
       await fs.copyFile(sourcePath, destPath)
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  // 移动/重命名文件
+  ipcMain.handle('file:move', async (event, sourcePath, destPath) => {
+    try {
+      // 确保目标目录存在
+      const destDir = path.dirname(destPath)
+      await fs.mkdir(destDir, { recursive: true })
+      
+      await fs.rename(sourcePath, destPath)
       return { success: true }
     } catch (error) {
       return { success: false, error: error.message }

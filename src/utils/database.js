@@ -427,9 +427,9 @@ export class DatabaseManager {
       throw new Error('数据库未初始化')
     }
 
-    // 开始事务
-    await window.electronAPI.execSQL(this.dbPath, 'BEGIN TRANSACTION')
-
+    // 注意：不使用事务，避免并发时的事务嵌套冲突
+    // SQLite 的单个操作是原子的，多个操作串行执行即可
+    
     try {
       // 先删除该图片的所有标注
       await window.electronAPI.runSQL(
@@ -462,12 +462,8 @@ export class DatabaseManager {
           )
         }
       }
-
-      // 提交事务
-      await window.electronAPI.execSQL(this.dbPath, 'COMMIT')
     } catch (error) {
-      // 回滚事务
-      await window.electronAPI.execSQL(this.dbPath, 'ROLLBACK')
+      console.error(`保存标注失败 imageId=${imageId}:`, error)
       throw error
     }
   }
