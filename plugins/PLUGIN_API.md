@@ -2,6 +2,22 @@
 
 本文档详细说明了 YoloMarkFlow 插件系统的 API，帮助开发者创建训练和推理插件。
 
+> ⚠️ **重要提示 / Important Notice**
+> 
+> **当前插件 API 处于不稳定状态，未来随时可能会有重大变更。**
+> 
+> **The plugin API is currently unstable and may undergo significant changes in the future.**
+> 
+> 我们建议：
+> - 不要立即着手开发插件，等待 API 稳定后再开始
+> - 如果您是内部开发者或有特殊需求，请先联系项目维护者
+> - 我们会尽快发布稳定的插件 API 版本
+> 
+> We recommend:
+> - Do not start developing plugins immediately, wait for the API to stabilize
+> - If you are an internal developer or have special requirements, please contact the project maintainer first
+> - We will release a stable plugin API version as soon as possible
+
 ## 📚 目录
 
 - [概述](#概述)

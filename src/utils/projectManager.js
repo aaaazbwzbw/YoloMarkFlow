@@ -21,7 +21,7 @@ export function createProjectConfig(projectInfo) {
     type: projectType, // 项目类型：'detection' (YOLO目标检测) 或 'classification' (分类标注)，默认为 'detection'
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    version: '1.0.1',
+    version: '1.0.2',
     settings: {
       imageFormats: ['.jpg', '.jpeg', '.png', '.bmp'],
       labelFormat: 'yolo', // yolo, coco, voc

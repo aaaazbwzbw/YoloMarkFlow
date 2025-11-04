@@ -43,7 +43,7 @@ If you find a bug, please create an Issue with the following information:
 ```markdown
 **环境 / Environment:**
 - OS: Windows 11
-- Version: 1.0.1
+- Version: 1.0.2
 - Node.js: 18.0.0
 
 **问题描述 / Description:**
