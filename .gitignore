@@ -65,6 +65,7 @@ ENV/
 plugins/*
 !plugins/.gitkeep
 !plugins/README.md
+!plugins/PLUGIN_API.md
 
 # 推理服务（如果需要闭源）
 # electron/inferenceService.js  # 取消注释以闭源
