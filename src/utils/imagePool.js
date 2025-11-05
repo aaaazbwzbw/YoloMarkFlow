@@ -183,7 +183,7 @@ export async function batchInsertImages(imageData) {
       
       // 如果文件名已改变，需要重命名文件
       if (finalFilename !== data.filename && data.destPath) {
-        const workspacePath = await getImagePoolWorkspacePath()
+    const workspacePath = await getImagePoolWorkspacePath()
         const newPathResult = await window.electronAPI.getImagePoolPath(finalFilename, workspacePath)
         if (newPathResult.success) {
           // 重命名文件
@@ -218,7 +218,7 @@ export async function batchInsertImages(imageData) {
         
         // 在插入前再次检查 hash 是否已存在（处理并发情况）
         const checkResult = await window.electronAPI.querySQL(
-          imagePoolDbPath,
+      imagePoolDbPath,
           'SELECT id, filename FROM images WHERE hash = ?',
           [data.hash]
         )
@@ -238,12 +238,12 @@ export async function batchInsertImages(imageData) {
         
         // hash 不存在，执行插入
         const insertResult = await window.electronAPI.runSQL(
-          imagePoolDbPath,
-          'INSERT INTO images (hash, filename, created_at) VALUES (?, ?, ?)',
+        imagePoolDbPath,
+        'INSERT INTO images (hash, filename, created_at) VALUES (?, ?, ?)',
           [data.hash, data.filename, data.created_at]
-        )
-        
-        if (!insertResult.success) {
+      )
+      
+      if (!insertResult.success) {
           // 如果是唯一约束冲突，再次查询已存在的记录
           if (insertResult.error && insertResult.error.includes('UNIQUE constraint')) {
             console.log(`[batchInsertImages] 插入时发生唯一约束冲突，查询已存在的记录: hash=${data.hash}`)
@@ -288,13 +288,13 @@ export async function batchInsertImages(imageData) {
       
       console.log(`[batchInsertImages] 批量插入完成: ${results.length} 张图片到数据库`)
       return results
-    } catch (error) {
+  } catch (error) {
       console.error('[batchInsertImages] 插入失败，回滚事务:', error)
       const rollbackResult = await window.electronAPI.execSQL(imagePoolDbPath, 'ROLLBACK')
       if (!rollbackResult.success) {
         console.error('[batchInsertImages] 回滚失败:', rollbackResult.error)
       }
-      throw error
+    throw error
     }
   } catch (error) {
     console.error('批量插入图片失败:', error)
@@ -645,8 +645,8 @@ export async function findOrphanedImages(projectPath) {
                   console.warn(`[findOrphanedImages] 扫描数据集版本数据库失败 ${versionDbPath}:`, err)
                 }
               }
-            }
-          } catch (error) {
+          }
+        } catch (error) {
             console.warn(`[findOrphanedImages] 列出数据集文件失败 ${datasetPath}:`, error)
           }
         } catch (error) {
@@ -775,7 +775,7 @@ export async function deleteOrphanedImages(imageIds, onProgress) {
       )
       if (!testResult.success) {
         console.log('图片池数据库连接失效，重新初始化...')
-        await initImagePool()
+    await initImagePool()
       }
     } catch (error) {
       console.log('图片池数据库连接检查失败，重新初始化...', error)
@@ -814,7 +814,7 @@ export async function deleteOrphanedImages(imageIds, onProgress) {
         'SELECT id, filename, hash, created_at FROM images WHERE id = ?',
           [imageId]
         )
-      
+        
       if (!result.success) {
         throw new Error(`数据库查询失败: ${result.error}`)
       }

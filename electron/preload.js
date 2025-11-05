@@ -126,7 +126,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getVersion: () => process.versions.electron
   },
   
-  // Python环境管理
+  // Python环境管理（历史命名，实际使用Node.js实现）
+  // 注意：detectGPU 使用Node.js通过系统命令获取GPU信息，不依赖Python
   pythonEnv: {
     detectGPU: () => ipcRenderer.invoke('python:detectGPU')
   },

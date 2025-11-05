@@ -27,12 +27,10 @@ class InferenceService {
     }
 
     try {
-      // 加载Python环境配置
+      // 加载Python环境配置（可选，仅用于GPU信息）
+      // 注意：现在所有依赖都已打包进 exe，不再需要虚拟环境路径
       this.envConfig = this.loadEnvConfig()
-      if (!this.envConfig || !this.envConfig.venvPath) {
-        console.error('[InferenceService] Python环境未配置')
-        return false
-      }
+      // 移除虚拟环境检查，因为依赖已打包，不再需要 venvPath
 
       // 获取推理插件
       const plugin = pluginManager.getPlugin('yolo-training-inference')
@@ -50,6 +48,7 @@ class InferenceService {
       console.log('[InferenceService] Starting inference server via plugin')
 
       // 使用插件启动推理服务器
+      // 注意：所有依赖已打包进 exe，不再需要虚拟环境路径
       this.process = pluginManager.executeCommand(
         'yolo-training-inference',
         'inference-server',
@@ -59,7 +58,7 @@ class InferenceService {
           cwd: plugin.path,
           env: {
             ...process.env,
-            YOLOMARKFLOW_VENV_PATH: this.envConfig.venvPath,
+            // 移除 YOLOMARKFLOW_VENV_PATH，因为依赖已打包，不再需要虚拟环境
             PYTHONIOENCODING: 'utf-8',
             PYTHONUNBUFFERED: '1'
           }
@@ -373,7 +372,8 @@ class InferenceService {
   }
 
   /**
-   * 加载Python环境配置
+   * 加载Python环境配置（可选，仅用于GPU信息）
+   * 注意：现在所有依赖都已打包进 exe，不再需要虚拟环境路径
    */
   loadEnvConfig() {
     try {
@@ -381,8 +381,14 @@ class InferenceService {
       if (fsSync.existsSync(configPath)) {
         return JSON.parse(fsSync.readFileSync(configPath, 'utf-8'))
       }
+      // 文件不存在是正常的，因为依赖已打包，不再需要虚拟环境配置
+      console.log('[InferenceService] Env config not found (optional):', configPath)
+      console.log('[InferenceService] Using default configuration (dependencies are bundled)')
     } catch (error) {
-      console.error('[InferenceService] Failed to load env config:', error)
+      // 读取或解析失败时，记录警告但不影响服务
+      // 因为依赖已打包，配置文件是可选的
+      console.warn('[InferenceService] Failed to load env config (optional):', error.message)
+      console.log('[InferenceService] Using default configuration (dependencies are bundled)')
     }
     return null
   }

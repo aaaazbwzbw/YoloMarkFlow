@@ -1225,8 +1225,30 @@ async function createWindow() {
       // 如果是相对路径，转换为绝对路径
       let fullPath = dirPath
       if (!path.isAbsolute(dirPath)) {
-        // 使用系统临时目录作为基础路径
-        fullPath = path.join(os.tmpdir(), dirPath)
+        // 检查是否是训练相关的临时目录
+        if (dirPath.includes('yolomarkflow_training')) {
+          // 训练临时目录应该放在插件目录下，因为训练程序的工作目录是插件目录
+          // 这样相对路径就能正确解析了
+          try {
+            const plugin = pluginManager.getPlugin('yolo-training-inference')
+            if (plugin && plugin.path) {
+              // 从相对路径中提取子路径（去掉 yolomarkflow_training/ 前缀）
+              // 例如：yolomarkflow_training/taskId/dataset -> training_temp/taskId/dataset
+              const subPath = dirPath.replace(/^yolomarkflow_training\//, '')
+              fullPath = path.join(plugin.path, 'training_temp', subPath)
+            } else {
+              // 如果插件不存在，回退到系统临时目录
+              fullPath = path.join(os.tmpdir(), dirPath)
+            }
+          } catch (error) {
+            // 如果获取插件失败，回退到系统临时目录
+            console.warn('[workspace:ensureDirectory] Failed to get plugin, using temp dir:', error)
+            fullPath = path.join(os.tmpdir(), dirPath)
+          }
+        } else {
+          // 其他相对路径使用系统临时目录作为基础路径
+          fullPath = path.join(os.tmpdir(), dirPath)
+        }
       }
       
       await fs.mkdir(fullPath, { recursive: true })
@@ -1760,10 +1782,11 @@ async function unregisterProjectPath(projectPath) {
 
 /**
  * 获取GPU信息（NVIDIA显卡）
+ * 使用Node.js直接执行系统命令，不依赖Python环境
  */
 function getGPUInfo() {
   try {
-    // 尝试执行 nvidia-smi 命令
+    // 使用Node.js的execSync执行 nvidia-smi 命令获取实时GPU信息
     const output = execSync(
       'nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits',
       { encoding: 'utf-8', timeout: 5000 }
@@ -1996,7 +2019,9 @@ ipcMain.handle('training:start', async (event, config) => {
     
   } catch (error) {
     console.error('Failed to start training:', error)
-    return { success: false, error: error.message }
+    // 确保错误信息正确传递，即使 error.message 为空
+    const errorMessage = error?.message || error?.toString() || String(error) || '未知错误'
+    return { success: false, error: errorMessage }
   }
 })
 
@@ -2533,11 +2558,14 @@ ipcMain.handle('plugin:importPlugin', async (event, pluginPackagePath) => {
 // ========== Python环境管理 ==========
 
 // GPU检测函数（共享）
+// 注意：此函数使用Node.js实现，通过系统命令（nvidia-smi）获取GPU信息，不依赖Python
+// 函数名中的"detectGPU"是历史遗留，实际实现与Python无关
 async function detectGPU() {
   try {
-    console.log('[GPU Detection] Starting NVIDIA GPU detection...')
+    console.log('[GPU Detection] Starting NVIDIA GPU detection (Node.js)...')
     
     // Windows下查询GPU名称和驱动版本（不查CUDA版本，因为该字段不支持）（异步）
+    // 使用Node.js的execAsync执行系统命令，不依赖Python环境
     const { stdout: output } = await execAsync('nvidia-smi --query-gpu=name,driver_version --format=csv,noheader', {
       encoding: 'utf8',
       timeout: 5000
@@ -2593,6 +2621,8 @@ async function detectGPU() {
 }
 
 // 检测GPU类型IPC接口
+// 注意：虽然命名为"python:detectGPU"，但实际使用Node.js实现，不依赖Python
+// 保留此命名以保持向后兼容，但实际实现与Python环境无关
 ipcMain.handle('python:detectGPU', async () => {
   return detectGPU()
 })
@@ -2856,7 +2886,9 @@ function parseCSV(content) {
 }
 
 /**
- * 加载Python环境配置
+ * 加载Python环境配置（可选，仅用于GPU信息）
+ * 注意：现在所有依赖都已打包进 exe，不再需要虚拟环境路径
+ * 此函数保留用于向后兼容，但配置文件是可选的
  */
 function loadPythonEnvConfig() {
   try {
@@ -2864,8 +2896,11 @@ function loadPythonEnvConfig() {
     if (fsSync.existsSync(configPath)) {
       return JSON.parse(fsSync.readFileSync(configPath, 'utf-8'))
     }
+    // 文件不存在是正常的，因为依赖已打包，不再需要虚拟环境配置
   } catch (error) {
-    console.error('Failed to load Python env config:', error)
+    // 读取或解析失败时，记录警告但不影响功能
+    // 因为依赖已打包，配置文件是可选的
+    console.warn('Failed to load Python env config (optional):', error.message || error)
   }
   return null
 }

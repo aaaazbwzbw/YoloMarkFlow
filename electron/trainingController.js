@@ -18,6 +18,7 @@ class TrainingController {
     this.socketServer = null
     this.socketPort = 9999
     this.eventHandlers = new Map() // taskId -> eventHandler
+    this.socketConnections = new Map() // 存储每个任务的Socket连接
   }
 
   /**
@@ -30,9 +31,15 @@ class TrainingController {
 
     return new Promise((resolve, reject) => {
       this.socketServer = net.createServer((socket) => {
-        console.log('[TrainingController] Client connected to socket server')
+        const remoteAddress = `${socket.remoteAddress}:${socket.remotePort}`
+        console.log(`[TrainingController] Client connected to socket server from ${remoteAddress}`)
 
         let buffer = ''
+        let taskId = null // 从第一条消息中获取taskId
+
+        // 设置socket选项，防止连接被过早关闭
+        socket.setKeepAlive(true, 10000) // 10秒后开始发送keepalive
+        socket.setNoDelay(true) // 禁用Nagle算法，立即发送数据
 
         socket.on('data', (data) => {
           buffer += data.toString()
@@ -45,34 +52,66 @@ class TrainingController {
             if (line.trim()) {
               try {
                 const message = JSON.parse(line)
+                
+                // 从第一条消息中获取taskId并存储连接
+                if (!taskId && message.taskId) {
+                  taskId = message.taskId
+                  this.socketConnections.set(taskId, socket)
+                  console.log(`[TrainingController] Socket connection registered for task: ${taskId}`)
+                }
+                
                 this.handleProgressMessage(message)
               } catch (e) {
-                console.error('[TrainingController] Failed to parse message:', e)
+                console.error('[TrainingController] Failed to parse message:', e, 'Line:', line)
               }
             }
           }
         })
 
         socket.on('end', () => {
-          console.log('[TrainingController] Client disconnected from socket server')
+          console.log(`[TrainingController] Client disconnected from socket server${taskId ? ` (task: ${taskId})` : ''} from ${remoteAddress}`)
+          if (taskId) {
+            this.socketConnections.delete(taskId)
+          }
+        })
+
+        socket.on('close', () => {
+          console.log(`[TrainingController] Socket closed${taskId ? ` (task: ${taskId})` : ''} from ${remoteAddress}`)
+          if (taskId) {
+            this.socketConnections.delete(taskId)
+          }
         })
 
         socket.on('error', (err) => {
-          console.error('[TrainingController] Socket error:', err)
+          console.error(`[TrainingController] Socket error${taskId ? ` (task: ${taskId})` : ''} from ${remoteAddress}:`, err)
+          if (taskId) {
+            this.socketConnections.delete(taskId)
+          }
         })
       })
 
-      this.socketServer.listen(this.socketPort, () => {
-        console.log(`[TrainingController] Socket server listening on port ${this.socketPort}`)
-        resolve(this.socketPort)
+      this.socketServer.listen(this.socketPort, '127.0.0.1', () => {
+        console.log(`[TrainingController] Socket server listening on 127.0.0.1:${this.socketPort}`)
+        // 添加短暂延迟，确保Socket服务器完全准备好接收连接
+        // 这可以解决某些设备上连接时机的问题
+        setTimeout(() => {
+          resolve(this.socketPort)
+        }, 100)
       })
 
       this.socketServer.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
           // 端口被占用，尝试其他端口
+          console.log(`[TrainingController] Port ${this.socketPort} in use, trying ${this.socketPort + 1}`)
           this.socketPort++
-          this.socketServer.listen(this.socketPort)
+          this.socketServer.listen(this.socketPort, '127.0.0.1', () => {
+            console.log(`[TrainingController] Socket server listening on 127.0.0.1:${this.socketPort}`)
+            setTimeout(() => {
+              resolve(this.socketPort)
+            }, 100)
+          })
         } else {
+          console.error(`[TrainingController] Socket server error:`, err)
           reject(err)
         }
       })
@@ -86,29 +125,37 @@ class TrainingController {
     const { type, taskId } = message
 
     console.log(`[TrainingController] Received ${type} message for task ${taskId}`)
+    console.log(`[TrainingController] Message content:`, JSON.stringify(message, null, 2))
 
     const handler = this.eventHandlers.get(taskId)
     if (!handler) {
       console.warn(`[TrainingController] No handler for task ${taskId}`)
+      console.warn(`[TrainingController] Available handlers:`, Array.from(this.eventHandlers.keys()))
       return
     }
 
     // 根据消息类型分发事件
     switch (type) {
       case 'status':
+        console.log(`[TrainingController] Calling onStatus handler for task ${taskId}`)
         handler.onStatus && handler.onStatus(message)
         break
       case 'progress':
+        console.log(`[TrainingController] Calling onProgress handler for task ${taskId}`)
         handler.onProgress && handler.onProgress(message)
         break
       case 'complete':
+        console.log(`[TrainingController] Calling onComplete handler for task ${taskId}`)
         handler.onComplete && handler.onComplete(message)
         this.cleanup(taskId)
         break
       case 'error':
+        console.log(`[TrainingController] Calling onError handler for task ${taskId}`)
         handler.onError && handler.onError(message)
         this.cleanup(taskId)
         break
+      default:
+        console.warn(`[TrainingController] Unknown message type: ${type}`)
     }
   }
 
@@ -118,16 +165,18 @@ class TrainingController {
   async startTraining(taskId, config, eventHandler) {
     try {
       // 确保Socket服务器已启动
-      await this.initSocketServer()
+      const socketPort = await this.initSocketServer()
+      console.log(`[TrainingController] Socket server ready on port ${socketPort}`)
+
+      // 注册事件处理器（必须在启动训练进程之前注册，确保能接收到第一条消息）
+      this.eventHandlers.set(taskId, eventHandler)
+      console.log(`[TrainingController] Event handler registered for task: ${taskId}`)
 
       console.log('[TrainingController] Starting training for task:', taskId)
 
-      // 注册事件处理器
-      this.eventHandlers.set(taskId, eventHandler)
-
       // 获取Python环境配置（用于GPU检测，不再需要虚拟环境）
+      // 注意：现在所有依赖都已打包进 exe，python_env_config.json 是可选的，仅用于 GPU 信息
       const envConfig = await this.loadEnvConfig()
-      // 注意：现在所有依赖都已打包进 exe，不再需要虚拟环境路径
 
       // 获取训练插件
       const plugin = pluginManager.getPlugin('yolo-training-inference')
@@ -140,8 +189,9 @@ class TrainingController {
         throw new Error(`插件可执行文件不存在: ${plugin.executablePath}`)
       }
 
-      // 创建临时目录
-      const tempDir = path.join(os.tmpdir(), 'yolomarkflow_training', taskId)
+      // 创建临时目录（在插件目录下，因为训练程序的工作目录是插件目录）
+      // 这样相对路径就能正确解析了
+      const tempDir = path.join(plugin.path, 'training_temp', taskId)
       await fs.mkdir(tempDir, { recursive: true })
 
       // 创建输出目录（使用任务名称作为子目录）
@@ -190,6 +240,19 @@ class TrainingController {
       }
 
       // 准备训练配置文件
+      // GPU 检测：优先使用配置文件中的信息，如果不存在则默认尝试使用 GPU
+      // 因为依赖已打包，训练程序会自动检测并使用 GPU（如果可用）
+      // 逻辑：如果配置文件明确指定了 NVIDIA GPU，使用它；否则默认尝试使用 GPU（训练程序会自动检测）
+      let useGPU = true // 默认尝试使用 GPU
+      if (envConfig?.gpu?.type === 'nvidia') {
+        useGPU = true // 配置文件明确指定了 NVIDIA GPU
+      } else if (envConfig?.gpu?.type) {
+        useGPU = false // 配置文件明确指定了非 NVIDIA GPU（如 CPU）
+      } else if (config.advanced?.useGPU === false) {
+        useGPU = false // 用户明确禁用 GPU
+      }
+      // 如果 envConfig 为 null（配置文件不存在），默认 useGPU = true，让训练程序自动检测
+      
       const trainingConfig = {
         taskId,
         dataYaml: config.dataYaml,
@@ -201,7 +264,7 @@ class TrainingController {
         tempDir,
         outputDir,
         usePretrained: config.usePretrained !== false,
-        useGPU: envConfig.gpu?.type === 'nvidia',
+        useGPU, // 默认尝试使用 GPU，训练程序会自动检测
         optimizer: config.advanced?.optimizer || 'SGD',
         learningRate: config.advanced?.learningRate || 0.01,
         earlyStop: config.advanced?.earlyStop !== false, // 默认启用早停
@@ -215,14 +278,20 @@ class TrainingController {
       console.log('[TrainingController] Training config:', trainingConfig)
       console.log('[TrainingController] Config saved to:', configPath)
 
+      // 确定数据集目录（data.yaml所在的目录）
+      // dataYaml 路径格式：.../training_temp/taskId/dataset/data.yaml
+      const dataYamlDir = path.dirname(config.dataYaml)
+      console.log('[TrainingController] Dataset directory (cwd):', dataYamlDir)
+
       // 使用插件启动训练进程
       // 注意：所有依赖已打包进 exe，不再需要虚拟环境路径
+      // 工作目录设置为数据集目录，这样 data.yaml 中的相对路径 path: . 就能正确解析
       const pythonProcess = pluginManager.executeCommand(
         'yolo-training-inference',
         'train',
         ['--config', configPath],
         {
-          cwd: plugin.path,
+          cwd: dataYamlDir,  // 工作目录设置为数据集目录，而不是插件目录
           env: {
             ...process.env,
             PYTHONUNBUFFERED: '1',
@@ -348,12 +417,47 @@ class TrainingController {
 
   /**
    * 清理任务资源
+   * 无论训练成功还是失败，都会清理临时目录
    */
   async cleanup(taskId) {
     const processInfo = this.activeProcesses.get(taskId)
     if (processInfo) {
-      // 清理临时文件（可选）
-      // await fs.rm(processInfo.tempDir, { recursive: true, force: true })
+      // 清理临时目录（无论训练成功还是失败）
+      if (processInfo.tempDir && fsSync.existsSync(processInfo.tempDir)) {
+        try {
+          // 尝试删除临时目录，如果失败则重试
+          let lastError = null
+          const maxRetries = 3
+          
+          for (let i = 0; i < maxRetries; i++) {
+            try {
+              await fs.rm(processInfo.tempDir, { recursive: true, force: true })
+              console.log(`[TrainingController] Cleaned up temp directory: ${processInfo.tempDir}`)
+              break  // 成功删除，退出重试循环
+            } catch (error) {
+              lastError = error
+              
+              // 如果是文件被占用的错误，等待后重试
+              if (error.code === 'EBUSY' || error.code === 'EPERM' || error.code === 'ENOTEMPTY') {
+                console.log(`[TrainingController] Cleanup failed, retrying ${i + 1}/${maxRetries}...`)
+                await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))) // 递增等待时间
+                continue
+              }
+              
+              // 其他错误直接抛出
+              throw error
+            }
+          }
+          
+          // 所有重试都失败
+          if (lastError && lastError.code) {
+            console.warn(`[TrainingController] Failed to cleanup temp directory after ${maxRetries} retries:`, lastError.message)
+          }
+        } catch (error) {
+          // 记录错误但不影响其他清理逻辑
+          console.error(`[TrainingController] Error cleaning up temp directory: ${error.message}`)
+        }
+      }
       
       this.activeProcesses.delete(taskId)
     }
@@ -369,15 +473,27 @@ class TrainingController {
       // 使用Electron的userData路径（与main.js保持一致）
       const { app } = require('electron')
       const configPath = path.join(app.getPath('userData'), 'python_env_config.json')
-      console.log('[TrainingController] Loading env config from:', configPath)
       
+      // 检查文件是否存在
+      if (!fsSync.existsSync(configPath)) {
+        // 文件不存在是正常的，因为依赖已打包，不再需要虚拟环境配置
+        // 只在需要时记录信息级别的日志
+        console.log('[TrainingController] Env config not found (optional):', configPath)
+        console.log('[TrainingController] Using default GPU detection (dependencies are bundled)')
+        return null
+      }
+      
+      console.log('[TrainingController] Loading env config from:', configPath)
       const data = await fs.readFile(configPath, 'utf-8')
       const config = JSON.parse(data)
       console.log('[TrainingController] Env config loaded:', config)
       
       return config
     } catch (e) {
-      console.error('[TrainingController] Failed to load env config:', e.message)
+      // 读取或解析失败时，记录警告但不影响训练
+      // 因为依赖已打包，配置文件是可选的
+      console.warn('[TrainingController] Failed to load env config (optional):', e.message)
+      console.log('[TrainingController] Using default GPU detection (dependencies are bundled)')
       return null
     }
   }

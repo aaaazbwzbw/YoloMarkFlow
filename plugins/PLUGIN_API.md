@@ -10,12 +10,12 @@
 > 
 > 我们建议：
 > - 不要立即着手开发插件，等待 API 稳定后再开始
-> - 如果您是内部开发者或有特殊需求，请先联系项目维护者
+> - 如果您是内部开发者或有特殊需求，请通过 GitHub Issues 或 Discussions 联系项目维护者
 > - 我们会尽快发布稳定的插件 API 版本
 > 
 > We recommend:
 > - Do not start developing plugins immediately, wait for the API to stabilize
-> - If you are an internal developer or have special requirements, please contact the project maintainer first
+> - If you are an internal developer or have special requirements, please contact the project maintainer via GitHub Issues or Discussions
 > - We will release a stable plugin API version as soon as possible
 
 ## 📚 目录
@@ -1011,12 +1011,27 @@ const monitor = new TrainingMonitor('task-001')
 
 ## 支持与反馈
 
-如果您在开发插件时遇到问题，请：
+如果您在开发插件时遇到问题，或需要获取更多信息，请通过以下方式联系：
+
+### 联系方式
+
+1. **GitHub Issues**: 
+   - 提交问题或功能请求：[提交 Issue](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
+   - 查看已有问题：[查看 Issues](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
+
+2. **GitHub Discussions**:
+   - 参与讨论：[Discussions](https://github.com/aaaazbwzbw/YoloMarkFlow/discussions)
+   - 提问和分享经验
+
+3. **直接联系**:
+   - 如果您是内部开发者或有特殊需求，可以通过 GitHub 的 Issues 或 Discussions 功能直接向项目维护者发送消息
+
+### 获取帮助
 
 1. 查看本文档的 [插件开发指南](#插件开发指南) 部分
 2. 参考官方插件示例：`plugins/yolo-training-inference/`
-3. 提交 [Issue](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
-4. 查看 [项目文档](../README.md)
+3. 查看 [项目文档](../README.md)
+4. 查看 [贡献指南](../CONTRIBUTING.md)
 
 ---
 
