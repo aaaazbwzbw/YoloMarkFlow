@@ -7,7 +7,7 @@
 **Professional Image Annotation Tool - YOLO Training Support**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
+[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
 [English](./README_EN.md) | [简体中文](./README.md)

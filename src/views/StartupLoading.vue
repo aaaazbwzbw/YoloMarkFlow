@@ -37,7 +37,7 @@
       </div>
       
       <!-- 版本信息 -->
-      <div class="version-info">v1.0.2</div>
+      <div class="version-info">v1.0.3</div>
     </div>
   </div>
 </template>
