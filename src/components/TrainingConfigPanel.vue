@@ -51,7 +51,7 @@
         </div>
         <div class="preview-item">
           <span class="preview-label">类别数量</span>
-          <span class="preview-value">{{ selectedDataset.stats?.categories?.length || 0 }}</span>
+          <span class="preview-value">{{ getCategoryCount(selectedDataset) }}</span>
         </div>
       </div>
 
@@ -339,6 +339,18 @@ export default {
       if (!this.config.name && this.selectedDataset) {
         this.config.name = `${this.selectedDataset.name}_训练_${new Date().getTime()}`
       }
+    },
+    getCategoryCount(dataset) {
+      if (!dataset) return 0
+      // 优先从 stats.categories 获取（如果有元数据）
+      if (dataset.stats?.categories?.length !== undefined) {
+        return dataset.stats.categories.length
+      }
+      // 如果没有元数据，从 categories 数组获取（getDatasetInfo 返回的结构）
+      if (dataset.categories?.length !== undefined) {
+        return dataset.categories.length
+      }
+      return 0
     },
     async selectOutputPath() {
       try {

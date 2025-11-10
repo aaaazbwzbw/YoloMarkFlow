@@ -38,21 +38,47 @@ export class BaseExporter {
       }
     }
     
-    // 计算实际使用的比例（归一化为0-1）
-    let actualTrainRatio = trainRatio / 100
-    let actualValRatio = includeVal ? (valRatio / 100) : 0
-    let actualTestRatio = includeTest ? (testRatio / 100) : 0
+    // 按比例切分（优先分配验证集和测试集，剩余全部给训练集）
+    // 注意：当有验证集或测试集时，训练集应该获得剩余的所有图片，而不是按照 trainRatio
+    let valCount = includeVal ? Math.floor(total * valRatio / 100) : 0
+    let testCount = includeTest ? Math.floor(total * testRatio / 100) : 0
     
-    // 验证比例总和（允许一定误差）
-    const sum = actualTrainRatio + actualValRatio + actualTestRatio
-    if (Math.abs(sum - 1.0) > 0.01) {
-      throw new Error(`比例总和必须为 100%，当前为 ${(sum * 100).toFixed(1)}%`)
+    // YOLO训练要求必须有验证集，如果验证集为空，至少分配1张图片
+    // 但前提是总图片数大于1，且 includeVal 为 true
+    if (includeVal && valCount === 0) {
+      if (total === 1) {
+        // 如果只有1张图片，无法同时分配给训练集和验证集
+        throw new Error('数据集只有1张图片，无法同时创建训练集和验证集。YOLO训练至少需要2张图片。')
+      } else {
+        console.warn('[BaseExporter] 验证集数量为0，但YOLO训练要求必须有验证集，将至少分配1张图片到验证集')
+        valCount = 1
+      }
     }
     
-    // 按比例切分（优先分配验证集和测试集，剩余全部给训练集）
-    const valCount = includeVal ? Math.floor(total * actualValRatio) : 0
-    const testCount = includeTest ? Math.floor(total * actualTestRatio) : 0
+    // 如果 includeTest 为 true 但 testCount 为 0，至少分配1张图片（如果总图片数足够）
+    if (includeTest && testCount === 0 && total > valCount + 1) {
+      console.warn('[BaseExporter] 测试集数量为0，将至少分配1张图片到测试集')
+      testCount = 1
+    }
+    
     const trainCount = total - valCount - testCount  // 训练集获得所有剩余
+    
+    // 确保训练集数量不为负数或0
+    if (trainCount <= 0) {
+      throw new Error(`计算错误：训练集数量为 ${trainCount}，需要至少1张图片 (total=${total}, valCount=${valCount}, testCount=${testCount}, valRatio=${valRatio}, testRatio=${testRatio})`)
+    }
+    
+    console.log('[BaseExporter] randomSplit config:', {
+      total,
+      trainRatio,
+      valRatio,
+      testRatio,
+      includeVal,
+      includeTest,
+      valCount,
+      testCount,
+      trainCount
+    })
     
     const result = {
       train: shuffled.slice(0, trainCount)
@@ -66,8 +92,15 @@ export class BaseExporter {
     }
     
     if (includeTest) {
-      result.test = shuffled.slice(offset)
+      result.test = shuffled.slice(offset, offset + testCount)
     }
+    
+    console.log('[BaseExporter] randomSplit result:', {
+      train: result.train.length,
+      val: result.val?.length || 0,
+      test: result.test?.length || 0,
+      total: result.train.length + (result.val?.length || 0) + (result.test?.length || 0)
+    })
     
     return result
   }

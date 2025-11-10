@@ -328,12 +328,36 @@ class TrainingManager {
     }
 
     try {
+      // 检查数据集路径是否存在，如果不存在则重新导出
+      let dataYamlPath = task.tempDataPath ? `${task.tempDataPath}/data.yaml` : null
+      
+      // 验证数据集路径是否存在（通过Electron API检查）
+      if (dataYamlPath && window.electronAPI?.fileExists) {
+        try {
+          const result = await window.electronAPI.fileExists(dataYamlPath)
+          if (!result || !result.exists) {
+            console.log(`[TrainingManager] Dataset path not found: ${dataYamlPath}, re-exporting...`)
+            // 重新导出数据集
+            dataYamlPath = await this.exportDatasetForTraining(task)
+          }
+        } catch (error) {
+          console.warn(`[TrainingManager] Failed to check dataset path: ${error.message}, re-exporting...`)
+          // 如果检查失败，重新导出数据集
+          dataYamlPath = await this.exportDatasetForTraining(task)
+        }
+      } else {
+        // 如果没有保存的路径，重新导出
+        console.log(`[TrainingManager] No saved dataset path, exporting...`)
+        dataYamlPath = await this.exportDatasetForTraining(task)
+      }
+      
       // 准备训练配置（从之前的配置恢复）
       const trainingConfig = {
         taskId: task.id,
         taskName: task.name,  // 添加任务名称
-        dataYaml: `${task.tempDataPath}/data.yaml`,
+        dataYaml: dataYamlPath,
         outputPath: task.config.outputPath || 'D:\\YoloMarkFlow\\YoloMarkFlow_trainOut',
+        yoloVersion: task.config.yoloVersion || 'yolov8',  // 添加YOLO版本
         modelSize: task.config.modelSize || 'n',
         epochs: task.config.epochs || 100,
         batchSize: task.config.batchSize || 16,
@@ -341,7 +365,8 @@ class TrainingManager {
         usePretrained: task.config.usePretrained !== false,
         optimizer: task.config.advanced?.optimizer || 'SGD',
         learningRate: task.config.advanced?.learningRate || 0.01,
-        patience: task.config.advanced?.patience || 50
+        patience: task.config.advanced?.patience || 50,
+        advanced: task.config.advanced || {}  // 传递完整的advanced配置
       }
       
       if (window.electronAPI?.training?.resume) {

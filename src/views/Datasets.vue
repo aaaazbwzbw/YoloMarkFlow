@@ -1021,10 +1021,19 @@ export default {
         // 构建完整导出路径：{选择的目录}/{数据集名}_v{版本}_{格式}/
         const version = exportForm.value.dataset?.version || 1
         const formatLower = exportForm.value.format.toLowerCase()
-        const exportFolderName = `${exportForm.value.datasetName}_v${version}_${formatLower}`
-        const fullOutputPath = `${exportForm.value.outputPath}/${exportFolderName}`
+        let exportFolderName = `${exportForm.value.datasetName}_v${version}_${formatLower}`
+        let fullOutputPath = `${exportForm.value.outputPath}/${exportFolderName}`
 
-        exportMessage.value = `创建导出目录: ${exportFolderName}...`
+        // 检查目录是否已存在，如果存在则添加秒级时间戳
+        const dirExistsResult = await window.electronAPI.directoryExists(fullOutputPath)
+        if (dirExistsResult.success && dirExistsResult.exists) {
+          const timestamp = Math.floor(Date.now() / 1000) // 秒级时间戳
+          exportFolderName = `${exportForm.value.datasetName}_v${version}_${formatLower}_${timestamp}`
+          fullOutputPath = `${exportForm.value.outputPath}/${exportFolderName}`
+          exportMessage.value = `目录已存在，使用新名称: ${exportFolderName}...`
+        } else {
+          exportMessage.value = `创建导出目录: ${exportFolderName}...`
+        }
 
         // 确保导出目录存在
         const dirResult = await window.electronAPI.ensureDirectory(fullOutputPath)
@@ -1034,8 +1043,11 @@ export default {
 
         // 构建导出配置
         const config = {
-          trainRatio: exportForm.value.trainRatio / 100,
-          valRatio: exportForm.value.valRatio / 100
+          trainRatio: exportForm.value.trainRatio,
+          valRatio: exportForm.value.valRatio,
+          testRatio: exportForm.value.testRatio,
+          includeVal: exportForm.value.includeVal,
+          includeTest: exportForm.value.includeTest
         }
 
         // 创建导出器实例

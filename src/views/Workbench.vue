@@ -3552,10 +3552,68 @@ export default {
           // 清除之前的模型推理结果
           this.fabricCanvas.clearModelAnnotations()
           
+          console.log('[Workbench] 推理结果:', {
+            count: result.count,
+            predictions: result.predictions,
+            classList: this.classList.map(c => ({ id: c.id, name: c.name }))
+          })
+          
+          // 如果类别列表为空，自动从推理结果中创建类别
+          if (this.classList.length === 0 && result.predictions.length > 0) {
+            console.log('[Workbench] 类别列表为空，自动从推理结果创建类别')
+            
+            // 提取唯一的类别名称
+            const uniqueClassNames = [...new Set(result.predictions.map(p => p.className))]
+            
+            // 为每个类别创建数据库记录
+            for (const className of uniqueClassNames) {
+              try {
+                const classColor = this.getRandomColor()
+                const categoryId = await dbManager.addCategory(className, classColor)
+                
+                const newClass = {
+                  id: categoryId,
+                  name: className,
+                  color: classColor,
+                  count: 0
+                }
+                
+                this.classList.push(newClass)
+                console.log(`[Workbench] 自动创建类别: ${className} (ID: ${categoryId})`)
+              } catch (error) {
+                console.error(`[Workbench] 创建类别失败: ${className}`, error)
+              }
+            }
+            
+            // 更新画布的类别列表
+            if (this.fabricCanvas) {
+              this.fabricCanvas.classList = JSON.parse(JSON.stringify(this.classList))
+            }
+            
+            if (uniqueClassNames.length > 0) {
+              this.$message.success(`已自动创建 ${uniqueClassNames.length} 个类别: ${uniqueClassNames.join(', ')}`)
+            }
+          }
+          
           // 转换预测结果为画布标注格式
           const canvasAnnotations = result.predictions.map(pred => {
-            const classInfo = this.classList.find(c => c.id === pred.classId || c.name === pred.className)
-            if (!classInfo) return null
+            // 尝试匹配类别：先按名称匹配，再按ID匹配
+            let classInfo = this.classList.find(c => c.name === pred.className)
+            if (!classInfo) {
+              classInfo = this.classList.find(c => c.id === pred.classId)
+            }
+            
+            // 如果找不到匹配的类别，使用第一个类别作为默认（不应该发生，因为上面已经自动创建了）
+            if (!classInfo) {
+              console.warn(`[Workbench] 未找到匹配的类别: classId=${pred.classId}, className=${pred.className}`)
+              if (this.classList.length > 0) {
+                classInfo = this.classList[0]
+                console.log(`[Workbench] 使用默认类别: ${classInfo.name}`)
+              } else {
+                console.error('[Workbench] 类别列表仍为空，无法创建标注框')
+                return null
+              }
+            }
             
             return {
               classId: classInfo.id,
@@ -3565,8 +3623,12 @@ export default {
             }
           }).filter(Boolean)
           
+          console.log('[Workbench] 转换后的标注框数量:', canvasAnnotations.length)
+          
           // 🔧 过滤与已存在标注框高度重叠的推理结果
           const filteredAnnotations = this.filterOverlappingPredictions(canvasAnnotations)
+          
+          console.log('[Workbench] 过滤后的标注框数量:', filteredAnnotations.length)
           
           // 加载过滤后的模型推理结果
           this.fabricCanvas.loadModelAnnotations(filteredAnnotations, this.classList)
@@ -3589,6 +3651,14 @@ export default {
           } else {
             if (canvasAnnotations.length > 0) {
               this.$message.info(`检测到 ${canvasAnnotations.length} 个对象，但全部与已有标注重叠`)
+            } else if (result.count > 0 && result.predictions.length > 0) {
+              // 如果推理有结果但转换后为空，说明类别不匹配
+              const unmatchedCount = result.predictions.length
+              this.$message.warning(`检测到 ${unmatchedCount} 个对象，但类别与当前项目不匹配，无法显示`)
+              console.warn('[Workbench] 推理结果类别不匹配:', {
+                predictions: result.predictions.map(p => ({ classId: p.classId, className: p.className })),
+                classList: this.classList.map(c => ({ id: c.id, name: c.name }))
+              })
             } else {
               this.$message.info('未检测到对象')
             }

@@ -74,11 +74,26 @@ class InferenceService {
       this.process.stdout.on('data', (data) => {
         const lines = data.toString('utf-8').split('\n').filter(line => line.trim())
         lines.forEach(line => {
+          // 过滤非JSON行（如调试信息、环境设置等）
+          // JSON行通常以 { 或 [ 开头
+          const trimmedLine = line.trim()
+          if (!trimmedLine.startsWith('{') && !trimmedLine.startsWith('[')) {
+            // 非JSON行，可能是调试信息，输出到stderr或忽略
+            if (trimmedLine.startsWith('[Env]') || trimmedLine.startsWith('[Training]') || trimmedLine.startsWith('[Inference]')) {
+              // 这些是Python脚本的调试信息，输出到控制台但不作为错误
+              console.log('[InferenceService]', trimmedLine)
+            }
+            return
+          }
+          
           try {
             const response = JSON.parse(line)
             this.handleResponse(response)
           } catch (error) {
-            console.error('[InferenceService] Failed to parse response:', line)
+            // 如果看起来像JSON但解析失败，记录错误
+            if (trimmedLine.startsWith('{') || trimmedLine.startsWith('[')) {
+              console.error('[InferenceService] Failed to parse JSON response:', line)
+            }
           }
         })
       })

@@ -31,11 +31,7 @@ export class YoloExporter extends BaseExporter {
     try {
       onProgress?.(0, 100, '初始化导出...')
       
-      // 1. 创建目录结构
-      await this.createDirectories(outputPath, config)
-      onProgress?.(5, 100, '创建目录结构...')
-      
-      // 2. 读取数据集数据库
+      // 1. 读取数据集数据库（先读取数据以确定实际配置）
       const dbPath = `${datasetPath}/annotations.db`
       
       // 打开数据库
@@ -67,15 +63,41 @@ export class YoloExporter extends BaseExporter {
         }
         const annotations = annotationsResult.data || []
         
-        // 3. 随机划分图片
+        // 2. 随机划分图片
+        console.log('[YoloExporter] Export config:', config)
+        console.log('[YoloExporter] Total images:', images.length)
         const splits = this.randomSplit(images, config)
+        console.log('[YoloExporter] Split result:', {
+          train: splits.train?.length || 0,
+          val: splits.val?.length || 0,
+          test: splits.test?.length || 0
+        })
         onProgress?.(15, 100, '划分数据集...')
+        
+        // YOLO训练要求必须有验证集，所以确保验证集不为空
+        // 如果验证集为空，randomSplit 应该已经至少分配了1张图片
+        const actualConfig = { ...config }
+        
+        // 验证切分结果
+        if (actualConfig.includeVal && (!splits.val || splits.val.length === 0)) {
+          throw new Error('验证集为空，但YOLO训练要求必须有验证集。请检查数据集大小和验证集比例设置。')
+        }
+        
+        // 3. 根据实际配置创建目录结构
+        await this.createDirectories(outputPath, actualConfig)
+        onProgress?.(20, 100, '创建目录结构...')
         
         // 4. 处理每个划分
         let processed = 0
         const totalImages = images.length
         
         for (const [splitName, splitImages] of Object.entries(splits)) {
+          // 跳过空的划分（理论上不应该发生，因为已经在 randomSplit 中处理）
+          if (!splitImages || splitImages.length === 0) {
+            console.warn(`[YoloExporter] 跳过空的划分: ${splitName}`)
+            continue
+          }
+          
           for (const image of splitImages) {
             // 复制图片
             await this.copyImage(image, outputPath, splitName)
@@ -85,12 +107,12 @@ export class YoloExporter extends BaseExporter {
             await this.createLabelFile(image, imageAnnotations, categories, outputPath, splitName)
             
             processed++
-            onProgress?.(15 + (processed / totalImages) * 70, 100, `处理图片 ${processed}/${totalImages}...`)
+            onProgress?.(20 + (processed / totalImages) * 70, 100, `处理图片 ${processed}/${totalImages}...`)
           }
         }
         
-        // 5. 生成 data.yaml
-        await this.createDataYaml(categories, splits, outputPath, config)
+        // 5. 生成 data.yaml（使用调整后的配置）
+        await this.createDataYaml(categories, splits, outputPath, actualConfig)
         onProgress?.(90, 100, '生成配置文件...')
         
         // 6. 保存导出历史

@@ -1,6 +1,6 @@
 {
   "name": "yolomarkflow",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "图像标注工具，支持 YOLO 与 COCO 导入导出，集成训练插件以完成模型训练",
   "author": "YoloMarkFlow Team",
   "license": "MIT",

@@ -234,12 +234,17 @@ async function createWindow() {
     // 开发模式：开发服务器在运行，加载 loading.html
     console.log('✓ 检测到开发服务器，加载 loading.html')
     mainWindow.loadFile(path.join(__dirname, '../loading.html'))
-    mainWindow.webContents.openDevTools() // 开启开发者工具
   } else {
     // 生产模式：加载打包后的文件，指定启动路由
     console.log('✗ 未检测到开发服务器，加载 dist/index.html')
     const indexPath = path.join(__dirname, '../dist/index.html')
     mainWindow.loadFile(indexPath, { hash: 'startup' })
+  }
+  
+  // 非打包环境（开发环境）时自动开启开发者工具
+  if (!app.isPackaged) {
+    mainWindow.webContents.openDevTools()
+    console.log('✓ 开发环境：已自动开启开发者工具')
   }
 
   mainWindow.on('closed', () => {

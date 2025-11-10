@@ -54,12 +54,31 @@ export async function listDatasets() {
         const metadataResult = await window.electronAPI.readJSON(metadataPath)
         
         if (metadataResult.success && metadataResult.data) {
-          datasets.push({
+          const dataset = {
             name: dir.name,
             path: datasetPath,      // 添加数据集路径
             dbPath: dbPath,         // 添加数据库路径
             ...metadataResult.data
-          })
+          }
+          
+          // 如果元数据中没有 categories 数组，从数据库查询
+          if (!dataset.categories || dataset.categories.length === 0) {
+            try {
+              await window.electronAPI.openDatabase(dbPath)
+              const categoriesResult = await window.electronAPI.querySQL(
+                dbPath,
+                'SELECT * FROM categories ORDER BY id'
+              )
+              if (categoriesResult.success && categoriesResult.data) {
+                dataset.categories = categoriesResult.data
+              }
+              await window.electronAPI.closeDatabase(dbPath)
+            } catch (error) {
+              console.warn(`读取数据集 ${dir.name} 的类别信息失败:`, error)
+            }
+          }
+          
+          datasets.push(dataset)
         } else {
           // 没有元数据，尝试从数据库读取
           const info = await getDatasetInfo(dir.name)

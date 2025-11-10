@@ -7,7 +7,7 @@
 **Professional Image Annotation Tool - YOLO Training Support**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
+[![Version](https://img.shields.io/badge/version-1.0.4-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
 [English](./README_EN.md) | [简体中文](./README.md)
@@ -461,6 +461,41 @@ Thanks to these excellent open-source projects:
 - [Fabric.js](http://fabricjs.com/) - Canvas graphics library
 - [ECharts](https://echarts.apache.org/) - Data visualization library
 - [Vite](https://vitejs.dev/) - Frontend build tool
+
+---
+
+## 📞 Issue Reporting
+
+If you encounter any issues, have feature suggestions, or need help while using YoloMarkFlow, please feel free to contact us through the following channels:
+
+### 🐛 Submit Issues
+
+- **GitHub Issues**: [Submit Issue](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
+- This is the most recommended feedback method for tracking and managing issues
+
+### 📧 Email Feedback
+
+- **Email**: [1526196180@qq.com](mailto:1526196180@qq.com)
+- Suitable for detailed problem descriptions, feature suggestions, or technical support requests
+
+### 💬 QQ Feedback
+
+- **QQ Number**: `1526196180`
+- Suitable for quick communication and real-time feedback
+
+### 📝 Feedback Suggestions
+
+To better help you resolve issues, please include the following information in your feedback:
+
+- **Problem Description**: Detailed description of the issue
+- **Reproduction Steps**: How to reproduce this issue
+- **Environment**: 
+  - OS Version
+  - YoloMarkFlow Version
+  - Relevant Configuration
+- **Error Messages**: If there are error messages, please provide the complete error information
+- **Screenshots**: If possible, please provide relevant screenshots
+- **Log Files**: **Please attach the `.log` file from the program installation directory** (e.g., `YoloMarkFlow.log`), which helps us quickly identify issues
 
 ---
 

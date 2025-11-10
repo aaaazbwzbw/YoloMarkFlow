@@ -269,7 +269,9 @@ class TrainingController {
         learningRate: config.advanced?.learningRate || 0.01,
         earlyStop: config.advanced?.earlyStop !== false, // 默认启用早停
         patience: config.advanced?.patience || 50,
-        pretrainedModelsDir
+        pretrainedModelsDir,
+        resume: config.resume || false,  // 是否从checkpoint恢复训练
+        resumePath: config.resumePath || null  // checkpoint文件路径（如果存在）
       }
 
       const configPath = path.join(tempDir, 'config.json')
@@ -380,6 +382,33 @@ class TrainingController {
       } catch (e) {
         // 文件可能不存在
       }
+    }
+
+    // 检查checkpoint文件是否存在
+    // checkpoint文件路径：outputDir/taskId/weights/last.pt
+    const baseOutputPath = config.outputPath || 'D:\\YoloMarkFlow\\YoloMarkFlow_trainOut'
+    const taskName = config.taskName || taskId
+    const safeTaskName = taskName.replace(/[<>:"/\\|?*]/g, '_')
+    const outputDir = path.join(baseOutputPath, safeTaskName)
+    const checkpointPath = path.join(outputDir, taskId, 'weights', 'last.pt')
+    
+    // 检查checkpoint文件是否存在
+    let shouldResume = false
+    try {
+      if (fsSync.existsSync(checkpointPath)) {
+        shouldResume = true
+        console.log(`[TrainingController] Checkpoint found: ${checkpointPath}, will resume training`)
+      } else {
+        console.log(`[TrainingController] No checkpoint found at ${checkpointPath}, starting new training`)
+      }
+    } catch (e) {
+      console.warn(`[TrainingController] Failed to check checkpoint: ${e.message}`)
+    }
+
+    // 标记为恢复训练
+    config.resume = shouldResume
+    if (shouldResume) {
+      config.resumePath = checkpointPath
     }
 
     // 重新启动训练（从checkpoint恢复）

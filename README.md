@@ -7,7 +7,7 @@
 **专业图像标注工具 - 支持 YOLO 训练**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
+[![Version](https://img.shields.io/badge/version-1.0.4-blue.svg)](https://github.com/aaaazbwzbw/YoloMarkFlow)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
 
 [English](./README_EN.md) | 简体中文
@@ -461,6 +461,49 @@ plugins/
 - [Fabric.js](http://fabricjs.com/) - Canvas 图形库
 - [ECharts](https://echarts.apache.org/) - 数据可视化库
 - [Vite](https://vitejs.dev/) - 前端构建工具
+
+---
+
+## 📞 问题反馈 / Issue Reporting
+
+如果您在使用 YoloMarkFlow 时遇到任何问题、有功能建议或需要帮助，欢迎通过以下方式联系我们：
+
+If you encounter any issues, have feature suggestions, or need help while using YoloMarkFlow, please feel free to contact us through the following channels:
+
+### 🐛 提交 Issue / Submit Issues
+
+- **GitHub Issues**: [提交问题](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
+- 这是最推荐的反馈方式，便于跟踪和管理问题
+- This is the most recommended feedback method for tracking and managing issues
+
+### 📧 邮件反馈 / Email Feedback
+
+- **邮箱 / Email**: [1526196180@qq.com](mailto:1526196180@qq.com)
+- 适合详细的问题描述、功能建议或技术支持请求
+- Suitable for detailed problem descriptions, feature suggestions, or technical support requests
+
+### 💬 QQ 反馈 / QQ Feedback
+
+- **QQ 号 / QQ Number**: `1526196180`
+- 适合快速沟通和实时反馈
+- Suitable for quick communication and real-time feedback
+
+### 📝 反馈建议 / Feedback Suggestions
+
+为了更好地帮助您解决问题，建议在反馈时包含以下信息：
+
+To better help you resolve issues, please include the following information in your feedback:
+
+- **问题描述 / Problem Description**: 详细描述遇到的问题
+- **复现步骤 / Reproduction Steps**: 如何重现这个问题
+- **环境信息 / Environment**: 
+  - 操作系统版本 / OS Version
+  - YoloMarkFlow 版本 / YoloMarkFlow Version
+  - 相关配置信息 / Relevant Configuration
+- **错误信息 / Error Messages**: 如果有错误提示，请提供完整的错误信息
+- **截图 / Screenshots**: 如果可能，请提供相关截图
+- **日志文件 / Log Files**: **请附上程序安装目录中的 `.log` 文件**（如 `YoloMarkFlow.log`），这有助于我们快速定位问题
+  - **Please attach the `.log` file from the program installation directory** (e.g., `YoloMarkFlow.log`), which helps us quickly identify issues
 
 ---
 

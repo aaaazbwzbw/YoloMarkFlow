@@ -23,6 +23,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.0.4] - 2025-11-10
+
+### 📝 版本说明 / Version Note
+
+这是一个**次小版本更新**，主要修复了部分已知问题，提升了系统的稳定性。
+
+**This is a minor patch release** that primarily fixes some known issues and improves system stability.
+
+> 💡 **重要提示 / Important Notice**
+> 
+> 我们正在对 YoloMarkFlow 的底层架构进行**大量重构**，以提升代码质量、性能和可维护性。
+> 
+> 在下一个**大版本**（v1.1.0）中，您将看到：
+> - ✨ 更多期待已久的功能
+> - 🚀 所有功能的全面优化
+> - 🎯 更好的用户体验
+> - 🔧 更稳定的系统架构
+> 
+> 敬请期待！
+> 
+> We are currently conducting **extensive refactoring** of YoloMarkFlow's underlying architecture to improve code quality, performance, and maintainability.
+> 
+> In the next **major version** (v1.1.0), you can expect:
+> - ✨ More long-awaited features
+> - 🚀 Comprehensive optimization of all features
+> - 🎯 Better user experience
+> - 🔧 More stable system architecture
+> 
+> Stay tuned!
+
+### 🐛 问题修复 / Fixed
+
+- ✅ **修复数据集导出问题** - 修复了导出数据集时，即使配置了验证集或测试集，依然只导出了训练集的问题
+  - 修复了导出配置参数传递不完整的问题，现在正确传递 `includeVal`、`includeTest` 和 `testRatio` 参数
+  - 修复了数据集切分逻辑，确保验证集和测试集被正确创建和分配
+  - 优化了切分算法，当验证集或测试集数量为0时，至少分配1张图片（满足YOLO训练要求）
+  - 修复了测试集切分逻辑，明确指定切分范围避免错误
+  - 添加了详细的调试日志，便于问题诊断
+- ✅ **修复训练任务类别数量显示问题** - 修复了新建训练任务时选择数据集后类别数量无法正确获取的问题
+  - 改进了 `listDatasets` 函数，确保返回的数据集对象始终包含 `categories` 数组
+  - 当数据集有元数据但缺少类别信息时，自动从数据库查询类别信息
+  - 在训练配置面板中添加了 `getCategoryCount` 方法，兼容不同的数据结构
+  - 统一了数据集数据结构，确保类别数量能正确显示
+- ✅ **修复导出目录重名问题** - 在导出数据集时，如果导出目录中已存在同名目录，自动在新导出的目录名中添加秒级时间戳
+  - 添加了目录存在性检查，避免覆盖已有数据
+  - 使用秒级时间戳确保目录名唯一性
+  - 提供清晰的用户提示信息
+
+### 🔧 优化改进 / Improved
+
+- ✅ **优化数据集导出逻辑** - 改进了数据集导出的执行顺序和错误处理
+  - 先读取数据并划分，再根据实际配置创建目录结构
+  - 添加了验证集和测试集为空的检查和警告
+  - 确保YOLO训练要求的验证集始终存在
+
+---
+
 ## [1.0.3] - 2025-11-5
 
 ### 🐛 问题修复 / Fixed
@@ -276,13 +333,46 @@ Thanks to all contributors who helped make YoloMarkFlow possible!
 
 **遇到问题？/ Having Issues?**
 
-- 提交 [Issue](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
-- 查看 [文档](README.md)
-- 加入社区讨论
+我们提供多种反馈渠道，欢迎随时联系我们：
 
-- Submit [Issues](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
-- Check [Documentation](README.md)
-- Join the community discussion
+We provide multiple feedback channels, feel free to contact us anytime:
+
+### 🐛 提交 Issue / Submit Issues
+
+- **GitHub Issues**: [提交问题](https://github.com/aaaazbwzbw/YoloMarkFlow/issues)
+- 这是最推荐的反馈方式，便于跟踪和管理问题
+- This is the most recommended feedback method for tracking and managing issues
+
+### 📧 邮件反馈 / Email Feedback
+
+- **邮箱 / Email**: [1526196180@qq.com](mailto:1526196180@qq.com)
+- 适合详细的问题描述、功能建议或技术支持请求
+- Suitable for detailed problem descriptions, feature suggestions, or technical support requests
+
+### 💬 QQ 反馈 / QQ Feedback
+
+- **QQ 号 / QQ Number**: `1526196180`
+- 适合快速沟通和实时反馈
+- Suitable for quick communication and real-time feedback
+
+### 📖 其他资源 / Other Resources
+
+- 查看 [文档](README.md) / Check [Documentation](README.md)
+- 加入社区讨论 / Join the community discussion
+
+### 📝 反馈建议 / Feedback Suggestions
+
+为了更好地帮助您解决问题，建议在反馈时包含以下信息：
+
+To better help you resolve issues, please include the following information in your feedback:
+
+- **问题描述 / Problem Description**: 详细描述遇到的问题
+- **复现步骤 / Reproduction Steps**: 如何重现这个问题
+- **环境信息 / Environment**: 操作系统版本、YoloMarkFlow 版本、相关配置信息
+- **错误信息 / Error Messages**: 如果有错误提示，请提供完整的错误信息
+- **截图 / Screenshots**: 如果可能，请提供相关截图
+- **日志文件 / Log Files**: **请附上程序安装目录中的 `.log` 文件**（如 `YoloMarkFlow.log`），这有助于我们快速定位问题
+  - **Please attach the `.log` file from the program installation directory** (e.g., `YoloMarkFlow.log`), which helps us quickly identify issues
 
 ---
 
